@@ -1,0 +1,8 @@
+node_modules
+.next
+dev.db
+dev.db-shm
+dev.db-wal
+*.log
+.env
+tsconfig.tsbuildinfo
