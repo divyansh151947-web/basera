@@ -67,8 +67,23 @@ export function JourneySection() {
   const active = JOURNEY_STAGES[stage] ?? JOURNEY_STAGES[0];
 
   return (
-    <section ref={containerRef} className="relative bg-[#0a0e16]" style={{ height: "340vh" }}>
-      <div className="sticky top-0 h-screen w-full overflow-hidden">
+    /*
+      Below xl (phones, tablets, small laptops) this is a NORMAL vertical
+      section: each stage renders its narrative followed by its visualization
+      in document flow, so nothing can overlap. The pinned scroll-story below
+      only ever worked when both panels had ~1280px+ of horizontal room —
+      measured overlap at 320/360/375/390/414/430/768/1024 before this change.
+
+      At xl+ the original pinned scroll-story is preserved exactly: the
+      wrapper is a sticky full-viewport stage and each stage's narrative and
+      visualization are absolutely-positioned overlays (left column + right
+      column). Because every stage item is `position: absolute` at xl+, it
+      contributes no layout height, so stage changes cannot shift anything —
+      the old `grid`/`gridArea` height-reservation trick (and its CLS comments)
+      is no longer needed.
+    */
+    <section ref={containerRef} className="relative bg-[#0a0e16] xl:h-[340vh]">
+      <div className="relative w-full overflow-hidden pt-14 pb-28 xl:sticky xl:top-0 xl:h-screen xl:p-0">
         {/* Cinematic atmospheric backdrop — pure CSS, no WebGL */}
         <div className="pointer-events-none absolute inset-0" style={{ background: "linear-gradient(180deg, rgba(255,170,100,0.10) 0%, rgba(20,26,44,0.06) 45%, rgba(10,12,22,0.22) 100%)", mixBlendMode: "soft-light" }} />
         <div className="pointer-events-none absolute inset-0" style={{ background: "radial-gradient(ellipse at center, transparent 55%, rgba(8,10,18,0.38) 100%)" }} />
@@ -90,29 +105,15 @@ export function JourneySection() {
 
         {/* NO room-based floating chips — removed completely. Room navigation belongs in 3D PropertyTour only. */}
 
-        {/* Left narrative panel */}
-        <div className="pointer-events-none absolute inset-y-0 left-0 flex w-full max-w-xl flex-col justify-center gap-3 p-6 md:p-12 xl:max-w-2xl">
-          {/*
-            Every stage is stacked into the SAME grid cell and only the active
-            one is visible. This panel is absolutely positioned and vertically
-            centred, so any change in the narrative's height re-centres it — and
-            the stages differ in height a lot (measured on a scroll-driven CLS
-            trace: the narrative block measured 342x452 -> 342x420 in one run and
-            342x702 -> 342x529 in another, worth up to 0.076 CLS on a single
-            stage change). Reserving the tallest stage's height up front turns a
-            stage change into a pure visibility change, which shifts nothing.
-
-            `visibility: hidden` rather than `display: none` is the point: it
-            keeps the inactive stages in layout (so the height stays reserved)
-            while still hiding them and swallowing their pointer events.
-          */}
-          <div className="grid">
-            {JOURNEY_STAGES.map((s) => (
-              <div
-                key={s.index}
-                className={s.index === active.index ? undefined : "invisible"}
-                style={{ gridArea: "1 / 1" }}
-              >
+        {/* Stage content — narrative + visualization per stage (see note above) */}
+        <div className="max-xl:space-y-16">
+          {JOURNEY_STAGES.map((s) => (
+            <div
+              key={s.index}
+              className={`${s.index === active.index ? "" : "xl:invisible"} xl:absolute xl:inset-0`}
+            >
+              {/* Narrative — in flow below xl; pinned left column at xl+ */}
+              <div className="max-w-xl p-6 md:p-10 xl:pointer-events-none xl:absolute xl:inset-y-0 xl:left-0 xl:flex xl:w-full xl:flex-col xl:justify-center xl:gap-3 xl:p-12 xl:max-w-2xl">
                 <Reveal>
                   <p className="text-[11px] font-semibold uppercase tracking-[0.25em] text-[#ffdf9e]">0{s.index + 1} / 05 — {s.eyebrow}</p>
                   <h2 className="font-display text-3xl md:text-4xl lg:text-5xl leading-[1.05] text-white mt-2 max-w-lg">{s.title}</h2>
@@ -146,42 +147,19 @@ export function JourneySection() {
                   )}
                 </Reveal>
               </div>
-            ))}
-          </div>
-        </div>
 
-        {/* Right visualization panel — LARGE, distinctive per stage */}
-        <div className="pointer-events-none absolute inset-y-0 right-0 flex w-full max-w-3xl flex-col justify-center items-end gap-6 p-6 md:p-12 xl:max-w-4xl">
-          {/*
-            Same stacking strategy as the left narrative panel, for the same
-            reason. This panel is absolutely positioned and vertically centred,
-            so the Reveal block re-centres whenever the visualization's height
-            changes between stages. Captured on a layout-shift trace: a single
-            stage change moved the block `dy=139 dh=-139` (and `dy=-52 dh=106`
-            on the next), worth up to 0.11 CLS per change — this was the
-            remaining homepage CLS after the left panel was stacked in Pass 2.
-
-            Stacking all stages into one grid cell and hiding the inactive ones
-            with `visibility: hidden` reserves the tallest stage's height, so a
-            stage change becomes a pure visibility change and shifts nothing.
-          */}
-          <div className="grid w-full justify-items-end">
-            {JOURNEY_STAGES.map((s) => (
-              <div
-                key={s.index}
-                className={s.index === active.index ? undefined : "invisible"}
-                style={{ gridArea: "1 / 1" }}
-              >
+              {/* Visualization — in flow below xl; pinned right column at xl+ */}
+              <div className="max-w-3xl mt-6 p-6 md:p-10 xl:pointer-events-none xl:absolute xl:inset-y-0 xl:right-0 xl:mt-0 xl:flex xl:w-full xl:flex-col xl:justify-center xl:items-end xl:gap-6 xl:p-12 xl:max-w-4xl">
                 <Reveal delayMs={80}>
                   <StageVisualization stage={s} />
                 </Reveal>
               </div>
-            ))}
-          </div>
+            </div>
+          ))}
         </div>
 
-        {/* Progress indicator — 5 dots only */}
-        <div className="absolute bottom-6 left-1/2 flex -translate-x-1/2 gap-1.5">
+        {/* Progress indicator — 5 dots only (pinned story at xl+) */}
+        <div className="absolute bottom-6 left-1/2 hidden -translate-x-1/2 gap-1.5 xl:flex">
           {JOURNEY_STAGES.map((s) => (
             <span
               key={s.index}
@@ -192,8 +170,8 @@ export function JourneySection() {
           ))}
         </div>
 
-        {/* Scroll cue */}
-        <div className="absolute bottom-6 left-1/2 hidden items-center gap-2 -translate-x-1/2 text-white/60 md:flex">
+        {/* Scroll cue — pinned story only (xl+) */}
+        <div className="absolute bottom-6 left-1/2 hidden items-center gap-2 -translate-x-1/2 text-white/60 xl:flex">
           <span className="block h-8 w-px overflow-hidden bg-white/20">
             <span className="scroll-cue-line block h-full w-px bg-[#ffdf9e]" />
           </span>
@@ -548,8 +526,10 @@ function ConvertVisualization({ data }: { data?: JourneyStage["leadData"] }) {
           ))}
         </div>
 
-        {/* Key metrics row */}
-        <div className="mt-8 pt-6 border-t border-white/10 grid grid-cols-3 gap-4">
+        {/* Key metrics row — three columns from sm; stacked full-width cards
+            below sm where 3-across leaves only ~43px of usable width (labels
+            and values clipped at 320–374 otherwise). */}
+        <div className="mt-8 pt-6 border-t border-white/10 grid grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-4">
           <MetricCard label="Avg. Time to Visit" value="3 days" icon={<CalendarCheck2 size={20} />} />
           <MetricCard label="Follow-up Rate" value="96%" icon={<MessageSquare size={20} />} />
           <MetricCard label="Conversion Lift" value="2.4x" icon={<TrendingUp size={20} />} />

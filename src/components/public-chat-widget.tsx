@@ -157,12 +157,18 @@ export function PublicChatWidget({ propertyId, contextLabel }: PublicChatWidgetP
 				aria-label="Open Basera AI chat"
 				aria-expanded={isOpen}
 				className="fixed bottom-5 right-5 z-50 flex h-16 w-16 items-center justify-center rounded-full bg-brand text-white shadow-[0_18px_42px_rgba(15,81,50,0.35)] ring-1 ring-white/10 transition-all duration-200 hover:-translate-y-0.5 hover:bg-brand-strong focus:outline-none focus-visible:ring-4 focus-visible:ring-brand/30 md:h-[68px] md:w-[68px]"
+				/* Safe-area lift: identical to bottom-5 when the inset is 0 (desktop);
+				   rises above the home indicator on notched phones. */
+				style={{ bottom: "max(1.25rem, calc(env(safe-area-inset-bottom) + 0.75rem))" }}
 			>
 				<MessageSquareText size={24} />
 			</button>
 
 			{isOpen && (
-				<div className="theme-light fixed bottom-24 right-4 z-50 w-[calc(100vw-1.25rem)] max-w-[420px] overflow-hidden rounded-[24px] border border-line bg-panel shadow-float sm:right-5">
+				<div
+					className="theme-light fixed bottom-24 right-4 z-50 w-[calc(100vw-1.25rem)] max-w-[420px] overflow-hidden rounded-[24px] border border-line bg-panel shadow-float sm:right-5"
+					style={{ bottom: "max(6rem, calc(env(safe-area-inset-bottom) + 5rem))" }}
+				>
 					<div className="flex items-center justify-between gap-3 border-b border-line bg-panel px-4 py-3.5">
 						<div className="flex items-center gap-3">
 							<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand text-sm font-semibold text-white shadow-[0_8px_18px_rgba(15,81,50,0.28)]">
