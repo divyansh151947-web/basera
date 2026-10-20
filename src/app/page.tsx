@@ -321,20 +321,25 @@ export default async function Home({
 								<Play size={15} /> See live demo
 							</Link>
 						</div>
-						<dl className="mt-10 flex max-w-md items-stretch gap-6 text-white sm:gap-8">
-							<div>
+						{/* Three proof-point stats. Below `sm` the three columns plus
+						    dividers cannot fit without clipping the long single-word
+						    labels ("QUALIFICATION", "PROPERTY TOURS"), so on phones the
+						    columns shrink + wrap and the decorative dividers hide.
+						    Desktop (sm+) is visually unchanged. */}
+						<dl className="mt-10 flex max-w-md flex-wrap items-stretch gap-x-6 gap-y-4 text-white sm:gap-x-8">
+							<div className="min-w-[7rem] flex-1">
 								<dt className="sr-only">AI lead qualification</dt>
 								<dd className="font-display text-2xl">AI</dd>
 								<dd className="mt-1 text-xs uppercase tracking-[0.14em] text-white/60">Lead qualification</dd>
 							</div>
-							<div className="w-px bg-white/15" aria-hidden />
-							<div>
+							<div className="hidden w-px bg-white/15 sm:block" aria-hidden />
+							<div className="min-w-[7rem] flex-1">
 								<dt className="sr-only">Interactive 3D property tours</dt>
 								<dd className="font-display text-2xl">Live 3D</dd>
 								<dd className="mt-1 text-xs uppercase tracking-[0.14em] text-white/60">Property tours</dd>
 							</div>
-							<div className="w-px bg-white/15" aria-hidden />
-							<div>
+							<div className="hidden w-px bg-white/15 sm:block" aria-hidden />
+							<div className="min-w-[7rem] flex-1">
 								<dt className="sr-only">Automated 24/7 follow-up</dt>
 								<dd className="font-display text-2xl">24/7</dd>
 								<dd className="mt-1 text-xs uppercase tracking-[0.14em] text-white/60">Follow-up</dd>

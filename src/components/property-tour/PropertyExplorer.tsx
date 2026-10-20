@@ -291,7 +291,7 @@ export function PropertyExplorer({ isOpen, onClose }: PropertyExplorerProps) {
 
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="text-[11px] font-semibold uppercase tracking-[0.1em] text-white/50 mb-1 block">Min Price (\u20B9)</label>
+                <label className="text-[11px] font-semibold uppercase tracking-[0.1em] text-white/50 mb-1 block">Min Price (₹)</label>
                 <input
                   type="number"
                   value={filters.minPrice}
@@ -301,7 +301,7 @@ export function PropertyExplorer({ isOpen, onClose }: PropertyExplorerProps) {
                 />
               </div>
               <div>
-                <label className="text-[11px] font-semibold uppercase tracking-[0.1em] text-white/50 mb-1 block">Max Price (\u20B9)</label>
+                <label className="text-[11px] font-semibold uppercase tracking-[0.1em] text-white/50 mb-1 block">Max Price (₹)</label>
                 <input
                   type="number"
                   value={filters.maxPrice}

@@ -671,7 +671,7 @@ export function VoiceSessionWidget({ defaultOrgSlug = "urbannest" }: { defaultOr
                 }
               }}
               placeholder={isLive ? "No microphone? Type here instead…" : "Start a voice session, or type below…"}
-              className="max-h-28 min-h-[44px] flex-1 resize-none rounded-2xl border border-line bg-[#f8faf9] px-3.5 py-2.5 text-sm text-ink outline-none transition placeholder:text-slate/80 focus:border-brand focus:ring-4 focus:ring-brand/10"
+              className="max-h-28 min-h-[44px] flex-1 resize-none rounded-2xl border border-line bg-[#f8faf9] px-3.5 py-2.5 text-sm text-ink outline-none transition placeholder:text-slate/80 focus:border-brand focus:ring-4 focus:ring-brand/10 placeholder-shown:min-h-[3.75rem]"
               aria-label="Type your message instead of speaking"
             />
             <button

@@ -1,8 +1,15 @@
 "use client";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CheckCircle2, AlertCircle, ImagePlus, Film } from "lucide-react";
 import { PropertyMediaUpload } from "@/components/PropertyMediaUpload";
+import { clearDraft, readDraft, writeDraft } from "@/lib/drafts";
+
+const DRAFT_KEY = "new-property";
+const EMPTY_FORM = {
+  projectName: "", developer: "", propertyType: "APARTMENT", bhk: "", city: "", locality: "",
+  priceMinInr: "", priceMaxInr: "", areaSqft: "", description: "",
+};
 
 /**
  * Add-property flow (two stages, matching the secure media architecture):
@@ -23,10 +30,21 @@ export default function NewPropertyButton() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [createdPropertyId, setCreatedPropertyId] = useState<string | null>(null);
-  const [form, setForm] = useState({
-    projectName: "", developer: "", propertyType: "APARTMENT", bhk: "", city: "", locality: "",
-    priceMinInr: "", priceMaxInr: "", areaSqft: "", description: "",
+  // Details draft survives browser back / refresh / mis-tap close so typed
+  // input is never silently lost (sessionStorage only — never leaves browser).
+  const [form, setForm] = useState(() => {
+    const draft = readDraft<Partial<typeof EMPTY_FORM>>(DRAFT_KEY);
+    return draft ? { ...EMPTY_FORM, ...draft } : EMPTY_FORM;
   });
+
+  const detailsDirty = JSON.stringify(form) !== JSON.stringify(EMPTY_FORM);
+
+  // Persist the details draft while it differs from the empty form. Queued
+  // media files cannot be serialized — the draft covers text fields only.
+  useEffect(() => {
+    if (detailsDirty) writeDraft(DRAFT_KEY, form);
+    else clearDraft(DRAFT_KEY);
+  }, [form, detailsDirty]);
 
   // Media chosen BEFORE the record exists (stage 1) → uploaded automatically
   // in stage 2. `uploaded` reports what actually landed on the server.
@@ -46,11 +64,16 @@ export default function NewPropertyButton() {
     setUploaded({ images: 0, video: false });
     setStage2Pending({ images: 0, video: false });
     setSkipWarning(false);
-    setForm({
-      projectName: "", developer: "", propertyType: "APARTMENT", bhk: "", city: "", locality: "",
-      priceMinInr: "", priceMaxInr: "", areaSqft: "", description: "",
-    });
+    setForm(EMPTY_FORM);
+    clearDraft(DRAFT_KEY);
   }, []);
+
+  // Closing with typed details asks first — a backdrop mis-tap can no longer
+  // destroy input without warning. Explicit close also discards the draft.
+  const requestClose = useCallback(() => {
+    if (JSON.stringify(form) !== JSON.stringify(EMPTY_FORM) && !window.confirm("Discard the unsaved property details?")) return;
+    resetAndClose();
+  }, [form, resetAndClose]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -76,6 +99,7 @@ export default function NewPropertyButton() {
       // Stage 2: media can only be attached to the created property. The
       // files picked in stage 1 ride along (queuedImages/queuedVideo) and are
       // uploaded as soon as this stage mounts.
+      clearDraft(DRAFT_KEY);
       setCreatedPropertyId(data.property.id);
       setStage("media");
       setSkipWarning(false);
@@ -115,7 +139,7 @@ export default function NewPropertyButton() {
         + Add property
       </button>
       {open && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" onClick={() => stage === "media" ? undefined : resetAndClose()}>
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" onClick={() => stage === "media" ? undefined : requestClose()}>
           {stage === "details" && (
             <form onClick={(e) => e.stopPropagation()} onSubmit={submit} className="bg-panel rounded-lg p-6 w-full max-w-md space-y-3 max-h-[90vh] overflow-y-auto">
               <h2 className="font-semibold text-ink">Add a property</h2>
@@ -178,7 +202,7 @@ export default function NewPropertyButton() {
                 </div>
               )}
               <div className="flex gap-2 justify-end pt-2">
-                <button type="button" onClick={resetAndClose} className="px-3 py-1.5 text-sm text-slate2">Cancel</button>
+                <button type="button" onClick={requestClose} className="px-3 py-1.5 text-sm text-slate2">Cancel</button>
                 <button disabled={saving} type="submit" className="px-3 py-1.5 text-sm rounded-md bg-brand text-white disabled:opacity-60">
                   {saving ? "Saving…" : hasQueuedMedia ? "Add property & upload media" : "Add property"}
                 </button>

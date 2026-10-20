@@ -141,7 +141,7 @@ export function PriceHistoryChart({ property }: PriceHistoryChartProps) {
         </button>
       </div>
 
-      <div className="flex gap-2 border-b border-white/10" role="tablist">
+      <div className="flex flex-wrap gap-2 border-b border-white/10" role="tablist">
         {[
           { id: "history", label: "Price History", icon: "TrendingUp" as IconName },
           { id: "projections", label: "Future Projections", icon: "TrendingUp" as IconName },

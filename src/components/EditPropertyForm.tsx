@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, Save, X } from "lucide-react";
 import { PropertyMediaUpload } from "@/components/PropertyMediaUpload";
+import { clearDraft, readDraft, writeDraft } from "@/lib/drafts";
 
 interface EditPropertyFormProps {
   propertyId: string;
@@ -36,6 +37,30 @@ interface PropertyData {
   videoPosterUrl: string | null;
 }
 
+/** Editable form fields (mirrors the initial state below). */
+interface EditFormState {
+  projectName: string;
+  developer: string;
+  propertyType: string;
+  bhk: string;
+  city: string;
+  locality: string;
+  address: string;
+  priceMinInr: string;
+  priceMaxInr: string;
+  areaSqft: string;
+  floor: string;
+  furnishing: string;
+  possessionDate: string;
+  availability: string;
+  description: string;
+  amenities: string[];
+  parking: boolean;
+}
+
+/** sessionStorage key for a property's unsaved edit draft. */
+const draftKey = (propertyId: string) => `edit-property:${propertyId}`;
+
 function parseImages(imagesJson: string | null | undefined): string[] {
   try {
     const parsed = JSON.parse(imagesJson ?? "[]");
@@ -60,8 +85,13 @@ export function EditPropertyForm({ propertyId, organizationId, onCancel, onSaved
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [property, setProperty] = useState<PropertyData | null>(null);
+  // Serialized server-loaded form — the "clean" reference for dirty checks.
+  const baselineRef = useRef<string | null>(null);
+  // True when a previous unsaved draft was restored on mount (surfaced in
+  // the UI so the user knows why fields differ from the saved record).
+  const [draftRestored, setDraftRestored] = useState(false);
 
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<EditFormState>({
     projectName: "",
     developer: "",
     propertyType: "APARTMENT",
@@ -92,7 +122,7 @@ export function EditPropertyForm({ propertyId, organizationId, onCancel, onSaved
       const data = await res.json();
       const p = data.property;
       setProperty(p);
-      setForm({
+      const loaded: EditFormState = {
         projectName: p.projectName ?? "",
         developer: p.developer ?? "",
         propertyType: p.propertyType ?? "APARTMENT",
@@ -110,7 +140,19 @@ export function EditPropertyForm({ propertyId, organizationId, onCancel, onSaved
         description: p.description ?? "",
         amenities: parseAmenities(p.amenitiesJson),
         parking: p.parking ?? false,
-      });
+      };
+      baselineRef.current = JSON.stringify(loaded);
+      // Restore an unsaved draft (browser back / refresh) only when it
+      // actually differs from the saved record; otherwise fall back clean.
+      const draft = readDraft<Partial<EditFormState>>(draftKey(propertyId));
+      const merged = draft ? { ...loaded, ...draft } : loaded;
+      if (JSON.stringify(merged) !== baselineRef.current) {
+        setForm(merged);
+        setDraftRestored(true);
+      } else {
+        setForm(loaded);
+        setDraftRestored(false);
+      }
     } catch {
       setError("Failed to load property.");
     } finally {
@@ -121,6 +163,22 @@ export function EditPropertyForm({ propertyId, organizationId, onCancel, onSaved
   useEffect(() => {
     fetchProperty();
   }, [fetchProperty]);
+
+  // Data preservation on back: persist unsaved edits continuously. When the
+  // form matches the saved record again (save or explicit discard) the draft
+  // is removed. Runs only on form changes, so a post-save clear is not
+  // immediately re-written.
+  useEffect(() => {
+    if (baselineRef.current === null) return;
+    if (JSON.stringify(form) === baselineRef.current) clearDraft(draftKey(propertyId));
+    else writeDraft(draftKey(propertyId), form);
+  }, [form, propertyId]);
+
+  const discardDraft = () => {
+    clearDraft(draftKey(propertyId));
+    if (baselineRef.current !== null) setForm(JSON.parse(baselineRef.current) as EditFormState);
+    setDraftRestored(false);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -159,6 +217,10 @@ export function EditPropertyForm({ propertyId, organizationId, onCancel, onSaved
       }
 
       showSuccess("Property saved successfully.");
+      // Saved — drop the local draft and re-baseline the dirty check.
+      clearDraft(draftKey(propertyId));
+      baselineRef.current = JSON.stringify(form);
+      setDraftRestored(false);
       if (onSaved) onSaved();
       router.refresh();
     } catch {
@@ -228,6 +290,21 @@ export function EditPropertyForm({ propertyId, organizationId, onCancel, onSaved
       {error && (
         <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl p-3">
           {error}
+        </div>
+      )}
+
+      {/* Restored draft notice — explains why fields may differ from the
+          saved record and offers a one-click revert. */}
+      {draftRestored && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#d8a94e]/30 bg-[#d8a94e]/10 p-3 text-sm text-[#ffdf9e]">
+          <span>Unsaved draft restored — edits from your previous visit are shown below.</span>
+          <button
+            type="button"
+            onClick={discardDraft}
+            className="shrink-0 underline underline-offset-4 hover:opacity-80"
+          >
+            Discard draft
+          </button>
         </div>
       )}
 

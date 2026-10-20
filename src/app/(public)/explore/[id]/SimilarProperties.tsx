@@ -62,7 +62,7 @@ export function SimilarProperties({ properties, currentPropertyId }: SimilarProp
             <Link
               key={property.id}
               href={`/explore/${property.id}`}
-              className="group flex gap-4 rounded-xl border border-white/10 bg-white/5 p-3 transition hover:border-[#d8a94e]/30 hover:bg-white/10"
+              className="group flex min-w-0 gap-4 rounded-xl border border-white/10 bg-white/5 p-3 transition hover:border-[#d8a94e]/30 hover:bg-white/10"
             >
               <div className="relative h-24 w-32 flex-shrink-0 rounded-lg overflow-hidden">
                 {cover ? (

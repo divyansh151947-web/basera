@@ -828,9 +828,12 @@ const sceneApiRef = useRef<SceneApi | null>(null);
         ))}
       </div>
 
-      {/* Brand crown */}
-      <div className="pointer-events-none absolute left-1/2 top-6 -translate-x-1/2 text-center">
-        <p className="font-display text-3xl tracking-[0.35em] text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.5)]">BASERA</p>
+      {/* Brand crown. On phones it is pushed below the Back control (top-left)
+          and slightly reduced so it never collides with it or the top-right
+          icon buttons; the mobile room chips (below) start under it. Desktop
+          is unchanged. */}
+      <div className="pointer-events-none absolute left-1/2 top-14 w-full max-w-[15rem] -translate-x-1/2 text-center sm:top-6 sm:max-w-none">
+        <p className="font-display text-2xl tracking-[0.3em] text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.5)] sm:text-3xl sm:tracking-[0.35em]">BASERA</p>
         <p className="mt-1 text-[10px] font-medium uppercase tracking-[0.3em] text-white/70">
           Aurum Villa · Golden hour · Live 3D
         </p>
@@ -894,9 +897,12 @@ const sceneApiRef = useRef<SceneApi | null>(null);
         </button>
       )}
 
-      {/* Cinematic intro overlay — same scene, film language. */}
+      {/* Cinematic intro overlay — same scene, film language. On phones the
+          block is lifted above the floating chat/voice band (which occupies
+          the bottom ~84px) so the progress bar and Skip/Enter actions are not
+          covered or pushed below the fold. Desktop unchanged. */}
       {phase === "cine" && (
-        <div className="absolute inset-x-0 bottom-[9vh] flex flex-col items-center gap-3 px-4 text-center">
+        <div className="absolute inset-x-0 bottom-28 flex flex-col items-center gap-3 px-4 text-center md:bottom-[9vh]">
           <p className="text-[11px] font-semibold uppercase tracking-[0.3em] text-[#ffdf9e]">A cinematic property film — rendered live</p>
           <Heading className="font-display text-3xl text-white drop-shadow-[0_2px_16px_rgba(0,0,0,0.6)] md:text-4xl">Aurum Villa, arriving at golden hour</Heading>
           <p className="max-w-md text-xs leading-6 text-white/70">Wide establishing shot → slow approach → architectural reveal → entrance. The film and the 3D tour are the same world.</p>
@@ -1005,7 +1011,7 @@ const sceneApiRef = useRef<SceneApi | null>(null);
 
       {/* Room nav chips (mobile) */}
       {(inTour || phase === "door") && (
-        <div className="absolute inset-x-0 top-20 flex gap-2 overflow-x-auto px-4 pb-1 md:hidden">
+        <div className="absolute inset-x-0 top-28 flex gap-2 overflow-x-auto px-4 pb-1 md:hidden">
           {[...NAV_ORDER, { id: "tower" as TourLocationId, index: "12", label: "City" }].map((item) => (
             <button
               key={item.id}

@@ -98,7 +98,9 @@ function PropertySkeleton() {
       <div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
         <div className="space-y-6">
           <div className="rounded-[1.6rem] overflow-hidden border border-white/10 bg-white/[0.04]">
-            <div className="relative aspect-[16/9] min-h-[400px] bg-white/5" />
+            {/* aspect + min-h demands a 711px intrinsic slot — keep the
+                skeleton matching the real gallery below lg. */}
+            <div className="relative max-lg:aspect-auto min-h-[400px] bg-white/5" />
           </div>
           <div className="h-12 w-3/4 rounded bg-white/5" />
           <p className="h-4 w-1/2 rounded bg-white/5" />

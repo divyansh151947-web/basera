@@ -47,7 +47,12 @@ export function PropertyGallery({ images, propertyName, locality, city }: Proper
   if (images.length === 0) {
     return (
       <div className="rounded-[1.6rem] overflow-hidden border border-white/10 bg-white/[0.04]">
-        <div className="relative aspect-[16/9] min-h-[400px]">
+        {/* `aspect-[16/9]` + `min-h` makes the box demand a 711px-wide
+            intrinsic slot (400 × 16/9), which overflows narrow columns and
+            pushes the gallery controls off-screen. Below lg the ratio is
+            dropped so the gallery simply fills its column at the 400px
+            minimum height; lg+ keeps the original desktop behaviour. */}
+        <div className="relative max-lg:aspect-auto min-h-[400px]">
           <div
             className="absolute inset-0 flex items-center justify-center"
             style={{
@@ -66,7 +71,9 @@ export function PropertyGallery({ images, propertyName, locality, city }: Proper
 
   return (
     <div className="rounded-[1.6rem] overflow-hidden border border-white/10 bg-white/[0.04]">
-      <div className="relative aspect-[16/9] min-h-[400px]">
+      {/* See the fallback gallery above: aspect + min-h must not coexist
+          below lg or the intrinsic 711px slot breaks narrow layouts. */}
+      <div className="relative max-lg:aspect-auto min-h-[400px]">
         {isLoading && (
           <div className="absolute inset-0 flex items-center justify-center bg-white/5">
             <div className="w-8 h-8 border-2 border-[#d8a94e] border-t-transparent rounded-full animate-spin" />
@@ -198,7 +205,9 @@ export function PropertyGallery({ images, propertyName, locality, city }: Proper
               <ChevronRight size={20} />
             </button>
           </div>
-          <div className="absolute bottom-8 left-1/2 -translate-x-1/2 text-white text-sm">
+          {/* Mobile: counter sits ABOVE the prev/next controls — both were
+              centered at bottom-8 and overlapped. Desktop unchanged. */}
+          <div className="absolute bottom-24 md:bottom-8 left-1/2 -translate-x-1/2 text-white text-sm">
             {selectedIndex + 1} / {images.length}
           </div>
         </div>

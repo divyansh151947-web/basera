@@ -34,7 +34,7 @@ export async function PilotReadiness({ organizationId }: { organizationId: strin
       </div>
       <div className="mt-4 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
         {readiness.sections.map((section) => (
-          <div key={section.key}>
+          <div key={section.key} className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate">{section.title}</p>
             <ul className="mt-2 space-y-1.5">
               {section.checks.map((check) => {

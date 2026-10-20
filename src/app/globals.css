@@ -143,7 +143,10 @@
 
 @layer base {
   html {
-    scroll-behavior: smooth;
+    /* No global scroll-behavior: smooth — it makes Next.js App Router save
+       scroll positions mid-animation on navigation, breaking back/forward
+       scroll restoration. Components that want smooth scrolling set it
+       explicitly on their own scrollTo/scrollIntoView calls. */
     -webkit-text-size-adjust: 100%;
   }
 
