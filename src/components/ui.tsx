@@ -1,28 +1,32 @@
-export function formatInr(n?: number | null) {
-  if (n == null) return "—";
-  if (n >= 10000000) return `₹${(n / 10000000).toFixed(2)} Cr`;
-  if (n >= 100000) return `₹${(n / 100000).toFixed(1)} L`;
-  return `₹${n.toLocaleString("en-IN")}`;
-}
+"use client";
 
-export function StatCard({ label, value, accent }: { label: string; value: string | number; accent?: string }) {
+import type { ReactNode } from "react";
+
+export { formatInr, formatBudgetRange } from "@/lib/formatters";
+
+export function StatCard({ label, value, accent, icon }: { label: string; value: string | number; accent?: string; icon?: ReactNode }) {
   return (
-    <div className="rounded-lg border border-line bg-panel p-4">
-      <p className="text-xs font-medium text-slate2 uppercase tracking-wide">{label}</p>
-      <p className={`mt-1.5 text-2xl font-semibold ${accent ?? "text-ink"}`}>{value}</p>
+    <div className="panel-surface card-hover group p-4 md:p-5">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate">{label}</p>
+        <span className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-brand/15 bg-brand-soft text-brand transition-transform duration-200 group-hover:scale-105">
+          {icon ?? <span className="h-2.5 w-2.5 rounded-full bg-current" />}
+        </span>
+      </div>
+      <p className={`mt-4 text-2xl font-semibold tracking-[-0.04em] ${accent ?? "text-ink"}`}>{value}</p>
     </div>
   );
 }
 
 const TEMP_STYLES: Record<string, string> = {
-  HOT: "bg-hot/10 text-hot border-hot/30",
-  WARM: "bg-warm/10 text-warm border-warm/30",
-  COLD: "bg-cold/10 text-cold border-cold/30",
+  HOT: "border-danger/20 bg-danger-soft text-danger",
+  WARM: "border-warning/25 bg-warning-soft text-warning",
+  COLD: "border-brand/20 bg-brand-soft text-brand",
 };
 
 export function TempBadge({ temperature }: { temperature: string }) {
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${TEMP_STYLES[temperature] ?? ""}`}>
+    <span className={`badge ${TEMP_STYLES[temperature] ?? ""}`}>
       {temperature}
     </span>
   );
@@ -41,5 +45,6 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export function StatusBadge({ status }: { status: string }) {
-  return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-paper border border-line text-ink">{STATUS_LABEL[status] ?? status}</span>;
+  const normalized = STATUS_LABEL[status] ?? status;
+  return <span className="badge">{normalized}</span>;
 }

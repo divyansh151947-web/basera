@@ -3,6 +3,20 @@ node_modules
 dev.db
 dev.db-shm
 dev.db-wal
+backups/
 *.log
 .env
 tsconfig.tsbuildinfo
+
+# Test-run artifacts and local runtime data — never source, never deployable.
+e2e/screenshots/
+.uploads/
+e2e-results.json
+e2e-run-output.txt
+git-status-final.txt
+final-build.exit
+resetpage.html
+
+# Editor/manual backup copies of source — never deployable.
+*.bak
+*.corrupt-backup

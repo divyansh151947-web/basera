@@ -1,4 +1,5 @@
 import "server-only";
+import { formatBudgetRange } from "@/lib/formatters";
 
 export interface SummaryInputs {
   name?: string | null;
@@ -15,13 +16,6 @@ export interface SummaryInputs {
   purpose?: string | null;
 }
 
-function formatInr(n?: number | null) {
-  if (!n) return "Not specified";
-  if (n >= 10000000) return `₹${(n / 10000000).toFixed(2)} crore`;
-  if (n >= 100000) return `₹${(n / 100000).toFixed(1)} lakh`;
-  return `₹${n.toLocaleString("en-IN")}`;
-}
-
 /**
  * Template-based summary (no AI call required) so this always works, is
  * fast, free, and never hallucinates — matches the format specified in
@@ -29,8 +23,8 @@ function formatInr(n?: number | null) {
  */
 export function generateLeadSummary(input: SummaryInputs): string {
   const budget =
-    input.budgetMinInr || input.budgetMaxInr
-      ? `${formatInr(input.budgetMinInr)} – ${formatInr(input.budgetMaxInr)}`
+    input.budgetMinInr != null || input.budgetMaxInr != null
+      ? formatBudgetRange(input.budgetMinInr, input.budgetMaxInr)
       : "Not specified";
 
   const lines = [

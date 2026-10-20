@@ -48,3 +48,9 @@ export async function requireSuperAdmin() {
   }
   return { userId: (session.user as any).id as string };
 }
+
+export function assertTenantScope(requestedOrganizationId: string | null | undefined, authenticatedOrganizationId: string) {
+  if (requestedOrganizationId && requestedOrganizationId !== authenticatedOrganizationId) {
+    throw new TenantAuthError("Organization mismatch for this account", 403);
+  }
+}

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isCronAuthorized } from "@/lib/cron-auth";
 import { getDueFollowUpsAcrossTenants, draftFollowUpMessage, scheduleNextFollowUp } from "@/lib/ai/followup-agent";
 import { db } from "@/db/client";
 import { followUps, leads } from "@/db/schema";
@@ -18,7 +19,7 @@ import { getOrCreateConversationForLead, addMessage } from "@/lib/data/conversat
  */
 export async function POST(req: NextRequest) {
   const secret = req.headers.get("x-cron-secret");
-  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
+  if (!isCronAuthorized(secret)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

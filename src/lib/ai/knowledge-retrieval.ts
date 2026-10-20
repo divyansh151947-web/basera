@@ -28,10 +28,10 @@ export async function retrieveKnowledgeContext(organizationId: string, query: st
     .map((d) => ({ d, score: keywordScore(`${d.title} ${d.content}`, query) }))
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score)
-    .slice(0, 4)
+    .slice(0, 2)
     .map((x) => x.d);
 
-  const propertySummaries = properties.slice(0, 12).map((p) => ({
+  const propertySummaries = properties.slice(0, 6).map((p) => ({
     id: p.id,
     project: p.projectName,
     developer: p.developer,
@@ -40,11 +40,7 @@ export async function retrieveKnowledgeContext(organizationId: string, query: st
     city: p.city,
     locality: p.locality,
     priceRangeInr: [p.priceMinInr, p.priceMaxInr],
-    areaSqft: p.areaSqft,
     availability: p.availability,
-    possessionDate: p.possessionDate,
-    amenities: p.amenitiesJson ? JSON.parse(p.amenitiesJson) : [],
-    furnishing: p.furnishing,
   }));
 
   return {

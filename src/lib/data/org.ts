@@ -15,19 +15,23 @@ import {
 import { and, eq, desc, asc, lte } from "drizzle-orm";
 
 // ---------------- Appointments ----------------
-export async function listAppointments(organizationId: string) {
-  return db.select().from(appointments).where(eq(appointments.organizationId, organizationId)).orderBy(asc(appointments.scheduledAt));
+export async function listAppointments(organizationId: string, page?: { limit: number; offset: number }) {
+  const q = db.select().from(appointments).where(eq(appointments.organizationId, organizationId)).orderBy(asc(appointments.scheduledAt));
+  if (page) return q.limit(page.limit + 1).offset(page.offset);
+  return q;
 }
 
 export async function createAppointment(organizationId: string, data: Partial<typeof appointments.$inferInsert>) {
-  const [row] = await db.insert(appointments).values({ organizationId, ...data } as any).returning();
+  const { organizationId: _ignoredOrg, id: _ignoredId, ...safeData } = (data ?? {}) as Record<string, unknown>;
+  const [row] = await db.insert(appointments).values({ ...safeData, organizationId } as any).returning();
   return row;
 }
 
 export async function updateAppointment(organizationId: string, id: string, data: Partial<typeof appointments.$inferInsert>) {
+  const { organizationId: _ignoredOrg, id: _ignoredId, createdAt: _ignoredCreated, ...safeData } = (data ?? {}) as Record<string, unknown>;
   const [row] = await db
     .update(appointments)
-    .set({ ...data, updatedAt: new Date().toISOString() } as any)
+    .set({ ...safeData, updatedAt: new Date().toISOString() } as any)
     .where(and(eq(appointments.id, id), eq(appointments.organizationId, organizationId)))
     .returning();
   return row;
@@ -41,7 +45,8 @@ export async function listFollowUps(organizationId: string, status?: string) {
 }
 
 export async function createFollowUp(organizationId: string, data: Partial<typeof followUps.$inferInsert>) {
-  const [row] = await db.insert(followUps).values({ organizationId, ...data } as any).returning();
+  const { organizationId: _ignoredOrg, id: _ignoredId, ...safeData } = (data ?? {}) as Record<string, unknown>;
+  const [row] = await db.insert(followUps).values({ ...safeData, organizationId } as any).returning();
   return row;
 }
 
@@ -70,9 +75,10 @@ export async function getOrganization(organizationId: string) {
 }
 
 export async function updateOrganization(organizationId: string, data: Partial<typeof organizations.$inferInsert>) {
+  const { id: _ignoredId, createdAt: _ignoredCreated, slug: _ignoredSlug, ...safeData } = (data ?? {}) as Record<string, unknown>;
   const [row] = await db
     .update(organizations)
-    .set({ ...data, updatedAt: new Date().toISOString() } as any)
+    .set({ ...safeData, updatedAt: new Date().toISOString() } as any)
     .where(eq(organizations.id, organizationId))
     .returning();
   return row;
@@ -99,7 +105,8 @@ export async function listPlans() {
 
 // ---------------- Notifications ----------------
 export async function createNotification(organizationId: string, data: { userId?: string; type: string; title: string; body: string }) {
-  const [row] = await db.insert(notifications).values({ organizationId, ...data }).returning();
+  const { organizationId: _ignoredOrg, id: _ignoredId, ...safeData } = (data ?? {}) as Record<string, unknown>;
+  const [row] = await db.insert(notifications).values({ ...safeData, organizationId } as any).returning();
   return row;
 }
 
@@ -113,7 +120,8 @@ export async function listKnowledgeDocs(organizationId: string) {
 }
 
 export async function createKnowledgeDoc(organizationId: string, data: { type: string; title: string; content: string }) {
-  const [row] = await db.insert(knowledgeDocuments).values({ organizationId, ...data } as any).returning();
+  const { organizationId: _ignoredOrg, id: _ignoredId, ...safeData } = (data ?? {}) as Record<string, unknown>;
+  const [row] = await db.insert(knowledgeDocuments).values({ ...safeData, organizationId } as any).returning();
   return row;
 }
 
@@ -124,12 +132,13 @@ export async function getAIConfig(organizationId: string) {
 }
 
 export async function upsertAIConfig(organizationId: string, data: Partial<typeof aiConfigs.$inferInsert>) {
+  const { organizationId: _ignoredOrg, id: _ignoredId, createdAt: _ignoredCreated, ...safeData } = (data ?? {}) as Record<string, unknown>;
   const existing = await getAIConfig(organizationId);
   if (existing) {
-    const [row] = await db.update(aiConfigs).set({ ...data, updatedAt: new Date().toISOString() } as any).where(eq(aiConfigs.organizationId, organizationId)).returning();
+    const [row] = await db.update(aiConfigs).set({ ...safeData, updatedAt: new Date().toISOString() } as any).where(eq(aiConfigs.organizationId, organizationId)).returning();
     return row;
   }
-  const [row] = await db.insert(aiConfigs).values({ organizationId, ...data } as any).returning();
+  const [row] = await db.insert(aiConfigs).values({ ...safeData, organizationId } as any).returning();
   return row;
 }
 
@@ -139,12 +148,13 @@ export async function getScoringConfig(organizationId: string) {
 }
 
 export async function upsertScoringConfig(organizationId: string, data: Partial<typeof scoringConfigs.$inferInsert>) {
+  const { organizationId: _ignoredOrg, id: _ignoredId, createdAt: _ignoredCreated, ...safeData } = (data ?? {}) as Record<string, unknown>;
   const existing = await getScoringConfig(organizationId);
   if (existing) {
-    const [row] = await db.update(scoringConfigs).set({ ...data, updatedAt: new Date().toISOString() } as any).where(eq(scoringConfigs.organizationId, organizationId)).returning();
+    const [row] = await db.update(scoringConfigs).set({ ...safeData, updatedAt: new Date().toISOString() } as any).where(eq(scoringConfigs.organizationId, organizationId)).returning();
     return row;
   }
-  const [row] = await db.insert(scoringConfigs).values({ organizationId, weightsJson: "{}", ...data } as any).returning();
+  const [row] = await db.insert(scoringConfigs).values({ weightsJson: "{}", ...safeData, organizationId } as any).returning();
   return row;
 }
 

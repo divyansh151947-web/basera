@@ -1,6 +1,6 @@
 import "dotenv/config";
 import bcrypt from "bcryptjs";
-import { db, sqlite } from "../db/client";
+import { db, closeDatabase } from "../db/client";
 import {
   plans, organizations, subscriptions, users, properties, leads,
   conversations, messages, aiConfigs, scoringConfigs, knowledgeDocuments, appointments,
@@ -80,25 +80,34 @@ async function main() {
 
   // ---- Users ----
   const passwordHash = await bcrypt.hash("demo1234", 10);
+  // Seeded demo/fictional accounts are pre-verified (Email 7A): they use
+  // non-deliverable @demo addresses, so no real verification mail can ever
+  // complete for them. Real signups start unverified and verify by link.
+  const verifiedAt = new Date().toISOString();
 
   const [superAdmin] = await db.insert(users).values({
-    organizationId: null, name: "Platform Admin", email: "superadmin@basera.demo", passwordHash, role: "SUPER_ADMIN",
+    organizationId: null, name: "Platform Admin", email: "superadmin@basera.demo",
+    passwordHash, role: "SUPER_ADMIN", emailVerifiedAt: verifiedAt,
   }).returning();
 
   const [businessAdmin] = await db.insert(users).values({
-    organizationId: org.id, name: "Rohit Malhotra", email: "admin@urbannest.demo", passwordHash, role: "BUSINESS_ADMIN",
+    organizationId: org.id, name: "Rohit Malhotra", email: "admin@urbannest.demo",
+    passwordHash, role: "BUSINESS_ADMIN", emailVerifiedAt: verifiedAt,
   }).returning();
 
   const [manager] = await db.insert(users).values({
-    organizationId: org.id, name: "Priya Sharma", email: "manager@urbannest.demo", passwordHash, role: "MANAGER",
+    organizationId: org.id, name: "Priya Sharma", email: "manager@urbannest.demo",
+    passwordHash, role: "MANAGER", emailVerifiedAt: verifiedAt,
   }).returning();
 
   const [agent1] = await db.insert(users).values({
-    organizationId: org.id, name: "Aman Verma", email: "agent1@urbannest.demo", passwordHash, role: "SALES_AGENT",
+    organizationId: org.id, name: "Aman Verma", email: "agent1@urbannest.demo", passwordHash,
+    role: "SALES_AGENT", emailVerifiedAt: verifiedAt,
   }).returning();
 
   const [agent2] = await db.insert(users).values({
-    organizationId: org.id, name: "Neha Kapoor", email: "agent2@urbannest.demo", passwordHash, role: "SALES_AGENT",
+    organizationId: org.id, name: "Neha Kapoor", email: "agent2@urbannest.demo", passwordHash,
+    role: "SALES_AGENT", emailVerifiedAt: verifiedAt,
   }).returning();
 
   // ---- Properties ----
@@ -247,4 +256,4 @@ main()
     console.error(e);
     process.exit(1);
   })
-  .finally(() => sqlite.close());
+  .finally(() => closeDatabase());

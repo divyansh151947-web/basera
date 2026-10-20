@@ -3,8 +3,19 @@ import { db } from "@/db/client";
 import { organizations } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { createLead, getLeadById } from "@/lib/data/leads";
-import { getOrCreateConversationForLead, getConversation, getMessages } from "@/lib/data/conversations";
+import { getPublicPropertyById } from "@/lib/data/properties";
+import { formatInr } from "@/lib/formatters";
+import { getOrCreateConversationForLead, getConversation, getMessages, addMessage, setConversationStatus } from "@/lib/data/conversations";
 import { processInboundMessage } from "@/lib/ai/conversation-agent";
+import { detectsHumanRequest, detectsLegalSensitive } from "@/lib/ai/handoff";
+import {
+  chatConversationTurnLimiter,
+  chatIpDayLimiter,
+  chatIpMinuteLimiter,
+  chatNewConversationLimiter,
+  getClientIp,
+  rateLimitedResponse,
+} from "@/lib/rate-limit";
 import { z } from "zod";
 
 /**
@@ -14,9 +25,13 @@ import { z } from "zod";
  * lead+conversation rows (never someone else's, since a fresh visitor has no
  * conversationId until this endpoint hands one back).
  *
- * Basic in-memory rate limiting per IP is included for the demo; production
- * should replace this with a distributed limiter (e.g. Redis/Upstash) since
- * in-memory state does not survive across serverless instances.
+ * Abuse protection (Batch 1B-1) is multi-dimensional and runs BEFORE any
+ * expensive work: per-IP burst + daily budgets gate every turn, new
+ * conversation (lead) creation has its own daily per-IP budget, and each
+ * conversation has a daily turn ceiling so one thread cannot burn unbounded
+ * AI calls. Buckets are in-memory (see src/lib/rate-limit.ts for the
+ * production distributed-limiter requirement). Session binding and tenant
+ * isolation below are unchanged.
  */
 
 const bodySchema = z.object({
@@ -24,36 +39,63 @@ const bodySchema = z.object({
   content: z.string().min(1).max(2000),
   conversationId: z.string().optional(),
   leadId: z.string().optional(),
+  // Optional: present when the widget was opened from a property detail page.
+  propertyId: z.string().max(128).optional(),
 });
 
-const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX = 15;
-const rateBuckets = new Map<string, { count: number; windowStart: number }>();
-
-function isRateLimited(key: string): boolean {
-  const now = Date.now();
-  const bucket = rateBuckets.get(key);
-  if (!bucket || now - bucket.windowStart > RATE_LIMIT_WINDOW_MS) {
-    rateBuckets.set(key, { count: 1, windowStart: now });
-    return false;
-  }
-  bucket.count += 1;
-  return bucket.count > RATE_LIMIT_MAX;
+/**
+ * Builds the verified-data block for a property-scoped turn. The property is
+ * re-fetched and eligibility-checked server-side (not archived, AVAILABLE,
+ * basera/demo orgs) so a client-supplied id can never inject another tenant's
+ * or a hidden listing into the model context.
+ */
+function buildPropertyContext(property: NonNullable<Awaited<ReturnType<typeof getPublicPropertyById>>>): string {
+  const p = property.property;
+  const lines = [
+    "PROPERTY THE CUSTOMER IS CURRENTLY VIEWING (verified):",
+    `- id: ${p.id}`,
+    `- project: ${p.projectName}${p.developer ? ` (by ${p.developer})` : ""}`,
+    `- type: ${p.propertyType}${p.bhk ? `, ${p.bhk} BHK` : ""}`,
+    `- location: ${p.locality}, ${p.city}`,
+    `- price: ${formatInr(p.priceMinInr)}${p.priceMaxInr !== p.priceMinInr ? ` – ${formatInr(p.priceMaxInr)}` : ""}`,
+    `- area: ${p.areaSqft ? `${p.areaSqft} sqft` : "not specified"}`,
+    `- furnishing: ${p.furnishing ?? "not specified"}`,
+    `- possession: ${p.possessionDate ?? "not specified"}`,
+    `- availability: ${p.availability}`,
+    `- amenities: ${p.amenitiesJson ?? "[]"} (JSON array)`,
+    "- The customer arrived from this property's page: treat questions like \"this property\", \"this flat\", \"price here\" as referring to it. Still only state values listed above.",
+  ];
+  return lines.join("\n");
 }
 
 export async function POST(req: NextRequest) {
-  const ip = req.headers.get("x-forwarded-for") ?? "unknown";
-  if (isRateLimited(ip)) {
-    return NextResponse.json({ error: "Too many messages. Please slow down." }, { status: 429 });
-  }
+  // H-3: never trust the raw client-supplied X-Forwarded-For value.
+  // getClientIp() keys on the last (nearest-proxy) entry instead.
+  const ip = getClientIp(req.headers);
+  const minuteCheck = await chatIpMinuteLimiter.check(`chat:ip-minute:${ip}`);
+  if (!minuteCheck.allowed) return rateLimitedResponse(minuteCheck.retryAfterMs);
+  const dayCheck = await chatIpDayLimiter.check(`chat:ip-day:${ip}`);
+  if (!dayCheck.allowed) return rateLimitedResponse(dayCheck.retryAfterMs);
 
-  const body = await req.json();
+  const body = await req.json().catch(() => null);
+  // Malformed bodies are a controlled 400 (never a 500): the widget always
+  // sends JSON, so anything else is a broken or abusive client.
+  if (!body || typeof body !== "object") return NextResponse.json({ error: "Invalid input" }, { status: 400 });
   const parsed = bodySchema.safeParse(body);
   if (!parsed.success) return NextResponse.json({ error: "Invalid input" }, { status: 400 });
-  const { orgSlug, content, conversationId, leadId } = parsed.data;
+  const { orgSlug, content, conversationId, leadId, propertyId } = parsed.data;
 
   const org = (await db.select().from(organizations).where(eq(organizations.slug, orgSlug)).limit(1))[0];
   if (!org) return NextResponse.json({ error: "Unknown business" }, { status: 404 });
+
+  // Resolve + verify the property context before any conversation work: an
+  // unknown/hidden/ineligible id is a controlled 404 (never silently used).
+  let propertyContext: string | null = null;
+  if (propertyId) {
+    const propertyData = await getPublicPropertyById(propertyId);
+    if (!propertyData) return NextResponse.json({ error: "Property not found or not available" }, { status: 404 });
+    propertyContext = buildPropertyContext(propertyData);
+  }
 
   let resolvedLeadId = leadId;
   let resolvedConversationId = conversationId;
@@ -67,45 +109,107 @@ export async function POST(req: NextRequest) {
   }
 
   if (!resolvedConversationId) {
+    // M-7: cap lead/conversation farming BEFORE creating rows. Checked once
+    // per fresh session (not per branch). Legitimate first-time visitors (a
+    // handful of sessions per day) never notice this budget.
+    const newConvoCheck = await chatNewConversationLimiter.check(`chat:new-convo:${ip}`);
+    if (!newConvoCheck.allowed) return rateLimitedResponse(newConvoCheck.retryAfterMs);
     const conversation = await getOrCreateConversationForLead(org.id, resolvedLeadId, "WEBSITE_CHAT");
     resolvedConversationId = conversation.id;
   } else {
     const conversation = await getConversation(org.id, resolvedConversationId);
     if (!conversation) return NextResponse.json({ error: "Invalid session" }, { status: 400 });
-    if (conversation.status === "HUMAN_HANDLING") {
-      // A human has taken over — still store the message, but don't let the AI reply.
-      const { addMessage } = await import("@/lib/data/conversations");
+    // Bind the session: the conversation must belong to the presented lead,
+    // otherwise one visitor could read or write another visitor's thread.
+    if (conversation.leadId !== resolvedLeadId) {
+      return NextResponse.json({ error: "Invalid session" }, { status: 400 });
+    }
+
+    const isHumanRequest = detectsHumanRequest(content) || detectsLegalSensitive(content);
+    if (conversation.status === "HUMAN_HANDLING" && !isHumanRequest) {
+      // Recover from a stale or false-positive handoff instead of poisoning the chat.
+      await setConversationStatus(org.id, resolvedConversationId, "AI_HANDLING");
+    } else if (conversation.status === "HUMAN_HANDLING" && isHumanRequest) {
       await addMessage(resolvedConversationId, "LEAD", content);
       return NextResponse.json({
         leadId: resolvedLeadId,
         conversationId: resolvedConversationId,
-        reply: null,
+        reply: "I’ve routed your request to a property specialist and they’ll follow up shortly.",
         status: "HUMAN_HANDLING",
+        aiStatus: "fallback" as const,
       });
     }
   }
 
-  const result = await processInboundMessage(org.id, resolvedConversationId, resolvedLeadId, content);
+  // Per-conversation daily turn ceiling: bounds AI spend on any single
+  // thread. Checked AFTER session binding (so it applies to the verified
+  // conversation) but BEFORE processInboundMessage (the expensive AI work).
+  // 60 turns/day is far beyond normal use (a long buying conversation is a
+  // dozen turns); capped visitors get a human-handover pointer, not a wall.
+  const turnCheck = await chatConversationTurnLimiter.check(`chat:turns:${resolvedConversationId}`);
+  if (!turnCheck.allowed) {
+    return NextResponse.json({
+      leadId: resolvedLeadId,
+      conversationId: resolvedConversationId,
+      reply: "This chat has reached today's message limit. Please try again tomorrow, or say “talk to an agent” and a property specialist will pick up right away.",
+      status: "AI_HANDLING",
+      aiStatus: "fallback",
+    });
+  }
 
-  return NextResponse.json({
-    leadId: resolvedLeadId,
-    conversationId: resolvedConversationId,
-    reply: result.reply,
-    status: result.handoff.triggered ? "HUMAN_HANDLING" : "AI_HANDLING",
-  });
+  try {
+    const result = await processInboundMessage(org.id, resolvedConversationId, resolvedLeadId, content, { propertyContext });
+    return NextResponse.json({
+      leadId: resolvedLeadId,
+      conversationId: resolvedConversationId,
+      reply: result.reply,
+      status: result.handoff.triggered ? "HUMAN_HANDLING" : "AI_HANDLING",
+      aiStatus: result.aiStatus,
+      propertyId: propertyId ?? undefined,
+    });
+  } catch (error) {
+    // Never log visitor identifiers or message content: UUIDs are bearer
+    // tokens for the cookieless widget and content may hold PII.
+    console.error("[public/chat] processing failed", {
+      orgSlug,
+      error: error instanceof Error ? error.message : "unknown",
+    });
+
+    const safeReply = "I didn’t quite catch that. Tell me the city, BHK, or budget you’re considering, and I’ll continue from there.";
+    try {
+      await addMessage(resolvedConversationId, "AI", safeReply, { metadata: { errorRecovery: true } });
+    } catch {
+      // The recovery write itself failed (e.g. transient DB issue) — still
+      // return a usable JSON reply with the session so the visitor's next
+      // message continues the same conversation instead of a blank 500.
+    }
+    return NextResponse.json({
+      leadId: resolvedLeadId,
+      conversationId: resolvedConversationId,
+      reply: safeReply,
+      status: "AI_HANDLING",
+      aiStatus: "fallback" as const,
+    });
+  }
 }
 
 export async function GET(req: NextRequest) {
+  // Rehydrate is bearer-token read (conversationId+leadId); rate-limit like
+  // POST so threads cannot be scraped at will.
+  const ip = getClientIp(req.headers);
+  const minuteCheck = await chatIpMinuteLimiter.check(`chat:ip-minute:${ip}`);
+  if (!minuteCheck.allowed) return rateLimitedResponse(minuteCheck.retryAfterMs);
   // Lets the widget rehydrate an existing conversation's message history.
   const conversationId = req.nextUrl.searchParams.get("conversationId");
+  const leadId = req.nextUrl.searchParams.get("leadId");
   const orgSlug = req.nextUrl.searchParams.get("orgSlug");
-  if (!conversationId || !orgSlug) return NextResponse.json({ error: "Missing params" }, { status: 400 });
+  if (!conversationId || !orgSlug || !leadId) return NextResponse.json({ error: "Missing params" }, { status: 400 });
 
   const org = (await db.select().from(organizations).where(eq(organizations.slug, orgSlug)).limit(1))[0];
   if (!org) return NextResponse.json({ error: "Unknown business" }, { status: 404 });
 
   const conversation = await getConversation(org.id, conversationId);
-  if (!conversation) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (!conversation || conversation.leadId !== leadId) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const messages = await getMessages(conversationId);
   return NextResponse.json({ messages });
 }

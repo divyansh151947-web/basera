@@ -27,6 +27,12 @@ const LEGAL_SENSITIVE_PATTERNS = [
   /\b(litigation|dispute|court|lawsuit|title deed|encumbrance|legal notice|rera complaint)\b/i,
 ];
 
+const SITE_VISIT_PATTERNS = [
+  /\bsite visit\b/i,
+  /\bvisit (?:the |this )?(?:property|project|flat|home)\b/i,
+  /\b(?:schedule|book|arrange) (?:a )?visit\b/i,
+];
+
 export function detectsHumanRequest(message: string): boolean {
   return HUMAN_REQUEST_PATTERNS.some((p) => p.test(message));
 }
@@ -51,14 +57,17 @@ export function checkHandoff(input: HandoffCheckInput): HandoffResult {
   if (input.requestsNegotiationOrCustomPrice) {
     return { shouldHandoff: true, reason: "Price negotiation requires sales approval" };
   }
-  if (input.leadScore >= input.hotThreshold) {
-    return { shouldHandoff: true, reason: "Lead has reached HOT qualification threshold" };
+  if (SITE_VISIT_PATTERNS.some((pattern) => pattern.test(input.latestLeadMessage))) {
+    return { shouldHandoff: true, reason: "Site visit requires sales coordination" };
   }
-  if (input.aiConfidence === "uncertain") {
-    return { shouldHandoff: true, reason: "AI does not have verified data to answer confidently" };
+  if (input.leadScore >= input.hotThreshold && input.leadScore > 0) {
+    return { shouldHandoff: true, reason: "Lead has reached HOT qualification threshold" };
   }
   if (input.sentimentFlag === "frustrated") {
     return { shouldHandoff: true, reason: "Customer appears frustrated" };
   }
+
+  // Missing verified data during a normal qualification flow is NOT a human-handoff event.
+  // Keep the conversation alive and ask for the next missing detail instead.
   return { shouldHandoff: false };
 }

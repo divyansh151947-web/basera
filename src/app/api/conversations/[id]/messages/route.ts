@@ -1,15 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireTenant, TenantAuthError } from "@/lib/tenant";
 import { getConversation, addMessage, setConversationStatus } from "@/lib/data/conversations";
+import { getLeadById } from "@/lib/data/leads";
+import { requireLeadAccess } from "@/lib/lead-access";
+import { getClientIp, rateLimitedResponse, staffApiLimiter } from "@/lib/rate-limit";
 import { z } from "zod";
 
 const schema = z.object({ content: z.string().min(1).max(4000), takeOver: z.boolean().optional(), returnToAI: z.boolean().optional() });
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const { organizationId, userId } = await requireTenant();
+    const { organizationId, role, userId } = await requireTenant();
+    const rl = await staffApiLimiter.check(`staff-api:${userId}:${getClientIp(req.headers)}`);
+    if (!rl.allowed) return rateLimitedResponse(rl.retryAfterMs);
     const conversation = await getConversation(organizationId, params.id);
     if (!conversation) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    // Agents may reply only inside threads they are authorized for.
+    const lead = await getLeadById(organizationId, conversation.leadId);
+    requireLeadAccess(role, userId, lead);
 
     const body = await req.json();
     const parsed = schema.safeParse(body);
