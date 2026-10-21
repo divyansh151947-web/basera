@@ -314,8 +314,10 @@ function MatchVisualization({ data }: { data?: JourneyStage["leadData"] }) {
         </div>
       </div>
 
-      {/* Alternatives — subtle, smaller */}
-      <div className="mt-6 grid grid-cols-2 gap-3">
+      {/* Alternatives — subtle, smaller. 2-up cards need ~140px each for
+          image + text; below 380px they measured 100–120px and the price
+          text clipped — stack to 1-up on small phones. */}
+      <div className="mt-6 grid max-[379px]:grid-cols-1 grid-cols-2 gap-3">
         {alternatives.map((prop, i) => (
           <div key={prop.name} className="rounded-xl border border-white/10 bg-white/[0.03] overflow-hidden hover:border-white/20 hover:bg-white/[0.05] transition-all duration-300 group">
             <div className="relative h-32 overflow-hidden">

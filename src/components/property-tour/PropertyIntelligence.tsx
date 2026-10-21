@@ -116,7 +116,9 @@ export function PropertyIntelligence({ currentLocation, onNavigate, inTour }: Pr
               expanded={expandedSection === "overview"}
               onToggle={() => toggleSection("overview")}
             >
-              <div className="grid grid-cols-2 gap-3">
+              {/* 2-up grid: on very narrow screens (<360px) the value text
+                  (e.g. "1,850 sq.ft.") overflows the card — stack to 1-up. */}
+              <div className="grid max-[359px]:grid-cols-1 grid-cols-2 gap-3">
                 <StatItem icon={BedDouble as LucideIcon} label="Bedrooms" value={PROPERTY_DATA.bedrooms} />
                 <StatItem icon={Bath as LucideIcon} label="Bathrooms" value={PROPERTY_DATA.bathrooms} />
                 <StatItem icon={Car as LucideIcon} label="Parking" value={PROPERTY_DATA.parking} />
@@ -139,7 +141,7 @@ export function PropertyIntelligence({ currentLocation, onNavigate, inTour }: Pr
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-white">{highlight.label}</p>
-                      <p className="text-xs text-white/60 mt-0.5">{highlight.desc}</p>
+                      <p className="text-xs text-white/60 mt-0.5 break-words">{highlight.desc}</p>
                     </div>
                   </div>
                 ))}
