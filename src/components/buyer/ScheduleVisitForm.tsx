@@ -21,6 +21,13 @@ export function ScheduleVisitForm({ userId }: ScheduleVisitFormProps) {
   const [properties, setProperties] = useState<PropertyOption[]>([]);
   const [selectedProperty, setSelectedProperty] = useState<string>("");
   const [scheduledAt, setScheduledAt] = useState("");
+  // Time-dependent min must be computed client-side after mount: rendering
+  // new Date() during SSR caused a hydration mismatch whenever the minute
+  // ticked between server and client render ("Server: 08:50 Client: 08:51").
+  const [minDateTime, setMinDateTime] = useState("");
+  useEffect(() => {
+    setMinDateTime(new Date().toISOString().slice(0, 16));
+  }, []);
   const [notes, setNotes] = useState("");
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -121,7 +128,7 @@ export function ScheduleVisitForm({ userId }: ScheduleVisitFormProps) {
             type="datetime-local"
             value={scheduledAt}
             onChange={(e) => setScheduledAt(e.target.value)}
-            min={new Date().toISOString().slice(0, 16)}
+            min={minDateTime}
             className="w-full appearance-none rounded-xl border border-white/15 bg-white/5 px-4 py-2.5 text-sm text-white outline-none focus:border-[#d8a94e]/60 focus:ring-4 focus:ring-[#d8a94e]/15"
           />
         </div>

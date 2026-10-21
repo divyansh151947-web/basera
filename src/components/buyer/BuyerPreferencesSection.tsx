@@ -298,7 +298,11 @@ export function BuyerPreferencesSection({ initialPreferences, userId }: BuyerPre
           </div>
         )}
 
-        <div className="flex items-center gap-3 pt-2">
+        {/* flex-wrap lets the Clear All button drop to its own line when the
+            row's combined min-content (Save ~145px + gap + Clear All ~68px)
+            exceeds the panel width on 320px phones; wider screens keep the
+            single-line layout. */}
+        <div className="flex flex-wrap items-center gap-3 pt-2">
           <button
             type="submit"
             disabled={saving}

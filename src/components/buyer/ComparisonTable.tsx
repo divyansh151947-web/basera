@@ -154,7 +154,12 @@ export function ComparisonTable({ properties, comparisonId, userId }: Comparison
   return (
     <div className="panel-surface overflow-hidden">
       <div className="p-5 border-b border-white/10">
-        <div className="flex items-center justify-between">
+        {/* flex-wrap: at 320px the title + right group min-content (~267px)
+            exceed the ~176px panel content (buyer rail + padding), and
+            overflow-hidden clipped the Delete button past the viewport. The
+            right group now drops to its own line there; ≥390px keeps the
+            original single-line layout. */}
+        <div className="flex flex-wrap items-center justify-between gap-y-1">
           <h2 className="text-lg font-semibold text-white">Property Comparison</h2>
           <div className="flex items-center gap-2">
             <span className="text-sm text-white/50">{properties.length} of 5 properties</span>

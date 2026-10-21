@@ -42,7 +42,10 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
         </div>
       </div>
 
-      <div className="grid md:grid-cols-3 gap-6 mt-6">
+      {/* grid-cols-1 keeps the below-md track minmax(0,1fr): without it the
+          implicit track sized to content min-width (~421px) and the page
+          overflowed horizontally on every phone width. */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-6">
         <div className="md:col-span-2 space-y-6">
           {lead.aiSummary && (
             <div className="rounded-lg border border-line bg-panel p-5">

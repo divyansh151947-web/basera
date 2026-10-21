@@ -48,7 +48,10 @@ export default async function BuyerProfilePage() {
         </p>
       </Reveal>
 
-      <Reveal delayMs={80} className="grid gap-6 lg:grid-cols-[1fr_2fr]">
+      {/* grid-cols-1 keeps the below-lg track minmax(0,1fr): without it the
+          implicit track sized to the content min-width (~386px during the
+          webfont-fallback phase) and the page overflowed at phone widths. */}
+      <Reveal delayMs={80} className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_2fr]">
         <div className="space-y-4">
           <div className="panel-surface p-6 text-center">
             <div className="flex flex-col items-center gap-4">

@@ -50,7 +50,13 @@ export function InvestmentCalculator({ initialValues = {} }: InvestmentCalculato
 
   return (
     <div className="panel-surface p-5">
-      <div className="flex items-center justify-between mb-4">
+      {/* Header row: below ~430px the h2 min-content ("Investment" + icon
+          ~122px) plus the button min-content ("Assumptions" + icon ~104px)
+          exceed the ~176px panel content width (buyer rail + paddings at
+          320px phones) and the button spilled past the viewport. flex-wrap
+          drops the button to its own line there; from ~430px up the
+          single-line justify-between layout is unchanged. */}
+      <div className="flex flex-wrap items-center justify-between gap-y-1 mb-4">
         <h2 className="text-lg font-semibold text-white flex items-center gap-2">
           <Calculator size={20} className="text-[#d8a94e]" /> Investment Calculator
         </h2>

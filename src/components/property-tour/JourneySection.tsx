@@ -244,12 +244,15 @@ function DiscoverVisualization({ data }: { data?: JourneyStage["leadData"] }) {
             </div>
           </div>
 
-          {/* Extracted understanding — LARGE, prominent */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-4 border-t border-white/10">
+          {/* Extracted understanding — LARGE, prominent.
+              Below ~400px the 2-up cards leave ~71px of content width, less than
+              the single word "Configuration" (~103px tracked uppercase) — stack to
+              1-up on the smallest phones; 2-up ≥400px and 4-up at md are unchanged. */}
+          <div className="grid max-[399px]:grid-cols-1 grid-cols-2 md:grid-cols-4 gap-3 pt-4 border-t border-white/10">
             {Object.entries(extracted).map(([key, value]) => (
               <div key={key} className="text-center p-4 rounded-xl bg-white/[0.03] border border-white/5 hover:border-[#d8a94e]/30 hover:bg-white/[0.05] transition-all duration-300">
                 <p className="font-display text-2xl md:text-3xl text-[#ffdf9e] font-medium">{value}</p>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-white/50 mt-1">{key}</p>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-white/50 mt-1 break-words">{key}</p>
               </div>
             ))}
           </div>
@@ -365,8 +368,10 @@ function IntelligenceVisualization({ data }: { data?: JourneyStage["leadData"] }
           </div>
         </div>
 
-        {/* Property snapshot — compact */}
-        <div className="grid grid-cols-4 gap-3 mb-6 p-4 rounded-xl bg-white/[0.03] border border-white/5">
+        {/* Property snapshot — compact. 4-up columns need ~66px each for
+            "Location"; below 430px they measured 38–56px and spilled, so drop to
+            2x2 on smaller screens (4-up from 430px up is unchanged). */}
+        <div className="grid max-[429px]:grid-cols-2 grid-cols-4 gap-3 mb-6 p-4 rounded-xl bg-white/[0.03] border border-white/5">
           <SnapshotItem label="Config" value="3 BHK" />
           <SnapshotItem label="Area" value="1,850 sq ft" />
           <SnapshotItem label="Price" value="₹1.85 Cr" accent />
@@ -447,13 +452,17 @@ function ExploreVisualization({ data }: { data?: JourneyStage["leadData"] }) {
         {/* Capabilities */}
         <div className="p-6 md:p-8 border-t border-white/10">
           <p className="text-[11px] font-semibold uppercase tracking-[0.15em] text-[#ffdf9e] mb-4">Explore Capabilities</p>
-          <div className="grid grid-cols-2 gap-3">
+          {/* Capabilities — 2-up needs ~157px cards for the longest word
+              ("Architectural" ~73px + icon/padding); below 408px cards measured
+              103–138px and the text spilled past the card edge, so stack to
+              1-up on small phones (2-up from 408px is unchanged). */}
+          <div className="grid max-[407px]:grid-cols-1 grid-cols-2 gap-3">
             {highlights.map((h, i) => (
               <div key={i} className="flex items-center gap-3 p-3 rounded-xl bg-white/[0.03] border border-white/5 hover:border-white/10 hover:bg-white/[0.05] transition-all">
                 <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#d8a94e]/15 text-[#ffdf9e]">
                   <Layers size={18} />
                 </div>
-                <p className="text-sm text-white/85">{h}</p>
+                <p className="min-w-0 break-words text-sm text-white/85">{h}</p>
               </div>
             ))}
           </div>

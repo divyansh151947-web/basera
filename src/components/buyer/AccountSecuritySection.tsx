@@ -31,8 +31,12 @@ export function AccountSecuritySection() {
         <Shield size={20} className="text-[#d8a94e]" /> Account Security
       </h2>
       <div className="space-y-3">
-        <div className="flex items-center justify-between p-3 rounded-xl border border-white/10 bg-white/5">
-          <div className="flex items-center gap-3">
+        {/* flex-wrap lets the action button/label drop to its own line on
+            320px phones, where the icon+title group alone is as wide as the
+            row; min-w-0 on the group lets long titles wrap instead of pushing
+            the button past the viewport. Wider screens keep one line. */}
+        <div className="flex flex-wrap gap-y-1 items-center justify-between p-3 rounded-xl border border-white/10 bg-white/5">
+          <div className="flex min-w-0 items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/20">
               <Shield size={18} className="text-blue-400" />
             </div>
@@ -50,8 +54,12 @@ export function AccountSecuritySection() {
             Change
           </button>
         </div>
-        <div className="flex items-center justify-between p-3 rounded-xl border border-white/10 bg-white/5">
-          <div className="flex items-center gap-3">
+        {/* flex-wrap lets the action button/label drop to its own line on
+            320px phones, where the icon+title group alone is as wide as the
+            row; min-w-0 on the group lets long titles wrap instead of pushing
+            the button past the viewport. Wider screens keep one line. */}
+        <div className="flex flex-wrap gap-y-1 items-center justify-between p-3 rounded-xl border border-white/10 bg-white/5">
+          <div className="flex min-w-0 items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-500/20">
               <Shield size={18} className="text-purple-400" />
             </div>
@@ -76,8 +84,12 @@ export function AccountSecuritySection() {
             {twoFactorEnabled === null ? "Loading…" : twoFactorEnabled ? "Manage" : "Set up"}
           </button>
         </div>
-        <div className="flex items-center justify-between p-3 rounded-xl border border-white/10 bg-white/5">
-          <div className="flex items-center gap-3">
+        {/* flex-wrap lets the action button/label drop to its own line on
+            320px phones, where the icon+title group alone is as wide as the
+            row; min-w-0 on the group lets long titles wrap instead of pushing
+            the button past the viewport. Wider screens keep one line. */}
+        <div className="flex flex-wrap gap-y-1 items-center justify-between p-3 rounded-xl border border-white/10 bg-white/5">
+          <div className="flex min-w-0 items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-500/20">
               <LogOut size={18} className="text-orange-400" />
             </div>

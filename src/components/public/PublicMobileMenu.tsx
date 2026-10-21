@@ -70,10 +70,14 @@ export function PublicMobileMenu({ links = DEFAULT_LINKS }: { links?: PublicNavL
         )}
       </button>
 
+      {/* The bg opacity must be a Tailwind scale step: "/97" is not in the
+          default opacity scale, so it compiled to no background at all and the
+          open menu rendered as bare text over the page content. "/95" keeps the
+          same near-opaque dark panel. */}
       {open && (
         <div
           id="public-mobile-menu"
-          className="absolute inset-x-0 top-full z-50 border-b border-white/10 bg-[#0a0e16]/97 backdrop-blur-md"
+          className="absolute inset-x-0 top-full z-50 border-b border-white/10 bg-[#0a0e16]/95 backdrop-blur-md"
         >
           <nav aria-label="Mobile" className="mx-auto flex max-w-6xl flex-col gap-1 px-4 py-4 sm:px-6">
             {links.map((l) => (

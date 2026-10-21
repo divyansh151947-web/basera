@@ -79,7 +79,11 @@ export function RecommendedPropertiesSection({ properties }: RecommendedProperti
             <Link
               key={property.id}
               href={`/explore/${property.id}`}
-              className="group flex gap-4 rounded-xl border border-white/10 bg-white/5 p-3 transition hover:border-[#d8a94e]/30 hover:bg-white/10"
+              /* Below ~416px the fixed 128px thumbnail + gap leave the text
+                 column under the 102px price width, so the price spilled past
+                 the row card (and the page) at every phone width. Stack the
+                 row there; the horizontal layout is unchanged from 416px up. */
+              className="group flex max-[415px]:flex-col gap-4 rounded-xl border border-white/10 bg-white/5 p-3 transition hover:border-[#d8a94e]/30 hover:bg-white/10"
             >
               <div className="relative h-24 w-32 flex-shrink-0 rounded-lg overflow-hidden">
                 {cover ? (
