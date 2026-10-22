@@ -660,6 +660,17 @@
   100% { background-position: -40% 0; }
 }
 
+/* Animated horizontal lines inside the Discover-stage conversation card
+   (JourneySection). The cards reference this by name from an inline style
+   (`animation: slideLine ...s linear infinite`), so the name must match
+   exactly — before this keyframes block existed the animation was a no-op. */
+@keyframes slideLine {
+  0% { transform: translateY(-10px); opacity: 0; }
+  12% { opacity: 1; }
+  88% { opacity: 1; }
+  100% { transform: translateY(10px); opacity: 0; }
+}
+
 @keyframes basera-fade-up {
   from { opacity: 0; transform: translateY(14px); }
   to { opacity: 1; transform: translateY(0); }

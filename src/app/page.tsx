@@ -7,6 +7,7 @@ import { PublicChatWidget } from "@/components/public-chat-widget";
 import { PublicVoiceButton } from "@/components/public-voice-button";
 import { AIVideoShowcase } from "@/components/public/AIVideoShowcase";
 import { PublicMobileMenu } from "@/components/public/PublicMobileMenu";
+import { JourneySection } from "@/components/property-tour/JourneySection";
 import { Reveal } from "@/components/reveal";
 import LazySection from "@/components/public/LazySection";
 import { DEFAULT_DESCRIPTION, absoluteUrl } from "@/lib/site";
@@ -14,6 +15,7 @@ import { pickFeaturedPropertyVideo } from "@/lib/featured-video";
 import type { ShowcaseProperty } from "@/components/public/AIVideoShowcase";
 import { PREF_CITY_COOKIE, PREF_LOCALITY_COOKIE } from "@/lib/location-preference";
 import { listPublicVideoProperties } from "@/lib/data/properties";
+import { resolvePublicChatOrgSlug } from "@/lib/public-chat";
 
 // Skeleton for 3D tour loading state
 function PropertyTourSkeleton() {
@@ -35,19 +37,10 @@ function PropertyTourSkeleton() {
   );
 }
 
-// Skeleton for the scroll-driven journey section (matches its 340vh scroll height)
-function JourneySectionSkeleton() {
-  return <div className="h-[340vh] w-full bg-[#0a0e16]" />;
-}
-
-// Lazy-load heavy 3D and scroll components (below the fold)
+// Lazy-load the heavy 3D tour (below the fold).
 const PropertyTour = dynamic(() => import("@/components/property-tour/PropertyTour").then((mod) => mod.PropertyTour), {
   ssr: false,
   loading: () => <PropertyTourSkeleton />,
-});
-const JourneySection = dynamic(() => import("@/components/property-tour/JourneySection").then((mod) => mod.JourneySection), {
-  ssr: false,
-  loading: () => <JourneySectionSkeleton />,
 });
 
 const JOURNEY_TABS = [
@@ -200,7 +193,7 @@ export default async function Home({
 						<span className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-b from-[#e0b45c] to-[#8a6238] text-sm font-semibold text-[#1a1206] shadow-[0_8px_20px_rgba(216,169,78,0.28)]">
 							B
 						</span>
-						<span className="font-display text-xl tracking-wide text-white">Basera</span>
+						<span className="font-display text-xl tracking-wide text-white max-[419px]:text-lg">Basera</span>
 					</Link>
 
 					<nav aria-label="Primary" className="hidden items-center gap-7 text-[13px] font-medium text-white/65 lg:flex">
@@ -218,15 +211,20 @@ export default async function Home({
 						</Link>
 					</nav>
 
-					{/* Three public entry points, always reachable: buyer links
-					    shrink to short labels on narrow phones; the staff link
-					    lives in the mobile menu below `lg`. */}
-					<div className="flex items-center gap-2 sm:gap-3">
-						<Link href="/buyer/login" className="hidden min-[420px]:inline-flex rounded-lg border border-white/20 px-3 py-2 text-[13px] font-medium text-white/85 transition hover:border-white/45 hover:text-white sm:px-4">
+					{/* Three public entry points, always reachable. Measured at 320px
+				    wide this header previously hid BOTH buyer buttons entirely
+				    (`hidden min-[420px]:inline-flex`), so buyer signup/login were
+				    undiscoverable on the most common small phones. They now always
+				    render inline: below `sm` the labels contract to "Login"/"Sign
+				    Up" and paddings shrink so logo + two buttons + menu fit 320px
+				    without overflow; full labels return at `sm`. */}
+
+					<div className="flex items-center gap-1.5 sm:gap-3">
+						<Link href="/buyer/login" className="inline-flex whitespace-nowrap rounded-lg border border-white/20 px-2.5 py-2 text-xs font-medium text-white/85 transition hover:border-white/45 hover:text-white sm:px-4 sm:text-[13px]">
 							<span className="hidden sm:inline">Buyer Login</span>
 							<span className="sm:hidden">Login</span>
 						</Link>
-						<Link href="/buyer/signup" className="hidden min-[420px]:inline-flex rounded-lg bg-white px-3 py-2 text-[13px] font-semibold text-[#0a0e16] transition hover:bg-white/90 sm:px-4">
+						<Link href="/buyer/signup" className="inline-flex whitespace-nowrap rounded-lg bg-white px-2.5 py-2 text-xs font-semibold text-[#0a0e16] transition hover:bg-white/90 sm:px-4 sm:text-[13px]">
 							<span className="hidden sm:inline">Create Buyer Account</span>
 							<span className="sm:hidden">Sign Up</span>
 						</Link>
@@ -312,7 +310,7 @@ export default async function Home({
 						<p className="mt-5 max-w-md text-base leading-7 text-white/70 sm:text-lg">
 							Basera qualifies buyers with AI, matches them to your inventory, and keeps every follow-up on schedule — one pipeline for your whole sales team.
 						</p>
-						<div className="mt-8 flex flex-col gap-3 sm:flex-row">
+						<div className="mt-8 flex max-sm:items-start flex-col gap-3 sm:flex-row">
 							<Link href="/explore" className="group inline-flex items-center justify-center gap-2 rounded-xl bg-white px-6 py-3.5 text-sm font-semibold text-[#0a0e16] shadow-[0_16px_36px_rgba(0,0,0,0.35)] transition hover:bg-white/90">
 								Find Properties
 								<ArrowRight size={16} className="transition-transform duration-200 group-hover:translate-x-0.5" />
@@ -380,25 +378,33 @@ export default async function Home({
 			    generous margin fired immediately after hydration. `waitForLoad`
 			    must not break the E2E canvas check (it asserts a canvas on "/"
 			    without scrolling): Playwright navigates with waitUntil:"load",
-			    so `load` is already complete by the time hydration runs there. */}
+			    so `load` is already complete by the time hydration runs there.
+
+			    The scroll-driven JourneySection deliberately lives OUTSIDE this
+			    lazy island now. It was previously gated behind the same island
+			    with a fixed `h-[340vh]` skeleton, but the journey's REAL heights
+			    are 6000-7200px on phones (320-1024) and 340vh only at xl — so
+			    every mount swapped a skeleton that was 2-3x too short, jumping
+			    everything below it (measured swap delta up to ~4600px at 390).
+			    The journey is plain text/CSS with a small client bundle, so
+			    server-rendering it costs LCP nothing (the three.js parse — the
+			    thing waitForLoad guards — stays inside the island), and the
+			    swap disappears entirely. */}
 			<LazySection
 				rootMargin="600px 0px"
 				waitForLoad
 				fallback={
-					<>
-						<section id="tour-experience" aria-label="Interactive 3D property experience" className="relative scroll-mt-20 bg-[#0a0e16]">
-							<PropertyTourSkeleton />
-						</section>
-						<JourneySectionSkeleton />
-					</>
+					<section id="tour-experience" aria-label="Interactive 3D property experience" className="relative scroll-mt-20 bg-[#0a0e16]">
+						<PropertyTourSkeleton />
+					</section>
 				}
 			>
 				<section id="tour-experience" aria-label="Interactive 3D property experience" className="relative scroll-mt-20 bg-[#0a0e16]">
 					<PropertyTour headingLevel="h2" />
 				</section>
-
-				<JourneySection />
 			</LazySection>
+
+			<JourneySection />
 
 			<AIVideoShowcase property={featuredVideo} />
 
@@ -698,7 +704,12 @@ export default async function Home({
 			</div>
 
 			<PublicChatWidget />
-			<PublicVoiceButton />
+			{/* orgSlug resolved server-side from NEXT_PUBLIC_PUBLIC_ORG_SLUG (same
+			    helper as the chat widget) so the voice panel starts on the actual
+			    deployed workspace instead of a hardcoded slug — on the live site
+			    the hardcoded default 404'd ("Unknown business") whenever the
+			    requested org wasn't seeded in production. */}
+			<PublicVoiceButton defaultOrgSlug={resolvePublicChatOrgSlug(process.env.NEXT_PUBLIC_PUBLIC_ORG_SLUG)} />
 		</>
 	);
 }

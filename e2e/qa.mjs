@@ -1660,13 +1660,384 @@ async function sectionFixes() {
   await ctx.close();
 }
 
+/**
+ * Regressions for the launch-era visual/UX batch:
+ *  R1  pinned scroll-story never overlaps at 1280/1440 (down AND up)
+ *  R2  buyer Login / Sign Up stay visible in the header at 320-1440px
+ *  R3  floating chat/voice launchers never overlap, never block each other
+ *  R4  buyer-signup API error contract through a real HTTP server
+ *  R5  mobile scroll-story renders in flow at its real height (skeleton gone)
+ */
+async function sectionVisualRegressions() {
+  const R = "regressions";
+
+  // ---------- shared journey probing (mirrors scripts/repro-journey-sweep) --
+  /** One scroll position: returns painted text rects vs viz card rects of
+   *  every stage and their overlap areas (>2px in both axes counts). Element
+   *  visibility is authoritative — invisible/opacity-0 (Reveal) elements are
+   *  ignored so transition states cannot fail the check. */
+  const sampleJourney = (page, geo, p) =>
+    page.evaluate(({ docTop, vh, height, p }) => {
+      window.scrollTo(0, Math.max(0, Math.round(docTop - vh * 0.5 + p * (height - vh))));
+      return true;
+    }, { ...geo, p })
+      .then(() => page.waitForTimeout(430))
+      .then(() =>
+        page.evaluate(() => {
+          const painted = (el) => {
+            let n = el;
+            while (n && n !== document.body) {
+              const c = getComputedStyle(n);
+              if (c.visibility === "hidden" || c.display === "none") return false;
+              n = n.parentElement;
+            }
+            return getComputedStyle(el).opacity === "1";
+          };
+          const rect = (el) => {
+            const b = el.getBoundingClientRect();
+            return { x: b.x, y: b.y, w: b.width, h: b.height };
+          };
+          const overlap = (a, b) => {
+            const x = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+            const y = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+            return x * y;
+          };
+          const journey = [...document.querySelectorAll("section")].find((s) => (s.className || "").includes("xl:h-[340vh]"));
+          if (!journey) return { error: "no journey section" };
+          const sticky = journey.firstElementChild;
+          const container = [...sticky.querySelectorAll("div")].find((d) => (d.className || "").includes("max-xl:space-y-16"));
+          if (!container) return { error: "no stage container" };
+          const stages = [...container.children];
+          const collisions = [];
+          const paintedStages = [];
+          stages.forEach((st, i) => {
+            const kids = [...st.children];
+            if (kids.length < 2 || !painted(st)) return;
+            const narr = kids[0];
+            const viz = kids[1];
+            const textRects = [];
+            const h2 = narr.querySelector("h2");
+            const body = [...narr.querySelectorAll("p")].find((el) => (el.className || "").includes("text-white/70"));
+            const chips = narr.querySelector(".flex.flex-wrap");
+            for (const el of [h2, body, chips]) {
+              if (el && painted(el)) textRects.push({ what: el.tagName + ":" + (el.textContent || "").slice(0, 30), rect: rect(el) });
+            }
+            const vizRects = [];
+            const card = viz.querySelector(".rounded-\\[1\\.6rem\\]");
+            if (card && painted(card)) vizRects.push({ what: "card", rect: rect(card) });
+            if (textRects.length || vizRects.length) paintedStages.push(i);
+            for (const t of textRects) {
+              for (const v of vizRects) {
+                const area = overlap(t.rect, v.rect);
+                if (area > 4) collisions.push({ stage: i, text: t.what, viz: v.what, area: Math.round(area) });
+              }
+            }
+          });
+          return { collisions, paintedStages, journeyHeight: journey.getBoundingClientRect().height };
+        })
+      );
+
+  const JOURNEY_P = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.92, 1];
+  async function journeySweep(width, height, tag) {
+    const ctx = await newContext({ width, height }, tag);
+    const page = await ctx.newPage();
+    await watch(page, tag);
+    await page.goto(`${BASE}/`, { waitUntil: "load", timeout: 60000 });
+    await page.waitForTimeout(2000);
+    const geo = await page.evaluate(() => {
+      const journey = [...document.querySelectorAll("section")].find((s) => (s.className || "").includes("xl:h-[340vh]"));
+      if (!journey) return null;
+      const rect = journey.getBoundingClientRect();
+      return { docTop: rect.top + scrollY, height: rect.height, vh: innerHeight };
+    });
+    check(R, `${width}px scroll-story section present`, !!geo, "section with xl:h-[340vh] not found");
+    if (!geo) { await ctx.close(); return; }
+
+    // DOWN: full progress sweep.
+    const downSamples = [];
+    for (const p of JOURNEY_P) downSamples.push(await sampleJourney(page, geo, p));
+    const downCollisions = downSamples.flatMap((s, i) => (s.collisions || []).map((c) => ({ p: JOURNEY_P[i], ...c })));
+    const stagesSeen = new Set(downSamples.flatMap((s) => s.paintedStages || []));
+    check(
+      R,
+      `${width}px pinned story covers at least 3 stages while scrolling down`,
+      stagesSeen.size >= 3,
+      `stages seen: ${[...stagesSeen].join(",") || "none"}`
+    );
+    check(
+      R,
+      `${width}px pinned story has no text/visualization collisions (down)`,
+      downCollisions.length === 0,
+      downCollisions.slice(0, 4).map((c) => `p=${c.p} stage=${c.stage} ${c.text} x ${c.viz} area=${c.area}px²`).join(" | ") || ""
+    );
+
+    // UP: dive back up through the story end-to-front and re-probe (the old
+    // overlap reproduced going up as well).
+    await sampleJourney(page, geo, 0.8);
+    const up = await sampleJourney(page, geo, 0.05);
+    check(
+      R,
+      `${width}px pinned story has no collisions after scrolling back up`,
+      (up.collisions || []).length === 0,
+      (up.collisions || []).slice(0, 4).map((c) => `stage=${c.stage} ${c.text} x ${c.viz}`) .join(" | ") || ""
+    );
+    await shot(page, `regressions-journey-${width}`);
+    await ctx.close();
+  }
+  // 1280 is the worst case (the old 64px overlap); 1440 the second (33px).
+  await journeySweep(1280, 800, "jr-1280");
+  await journeySweep(1440, 900, "jr-1440");
+
+  // ---------- R2: header buyer buttons always visible ----------------------
+  for (const [label, vp] of [
+    ["320px", { width: 320, height: 700 }],
+    ["390px", { width: 390, height: 844 }],
+    ["1440px", { width: 1440, height: 900 }],
+  ]) {
+    const ctx = await newContext(vp, `header-${vp.width}`);
+    const page = await ctx.newPage();
+    await watch(page, `header-${vp.width}`);
+    await page.goto(`${BASE}/`, { waitUntil: "load", timeout: 60000 });
+    await page.waitForTimeout(900);
+    const tiny = vp.width < 640;
+    const login = page.locator('header a[href="/buyer/login"]');
+    const signup = page.locator('header a[href="/buyer/signup"]');
+    const menu = page.getByRole("button", { name: /open menu/i });
+    check(R, `${label} buyer Login visible in header`, await login.isVisible());
+    check(R, `${label} buyer Sign Up visible in header`, await signup.isVisible());
+    // Below `lg` the burger is the navigation takeover (lg:hidden wrapper in
+    // PublicMobileMenu); at/above `lg` it renders NOTHING by design — the
+    // inline primary nav takes over. Assert the right takeover per width.
+    if (vp.width < 1024) {
+      check(R, `${label} menu button still visible`, await menu.isVisible());
+    } else {
+      const inlineNav = page.locator('header nav[aria-label="Primary"] a').first();
+      check(R, `${label} desktop header takes over with inline nav`, await inlineNav.isVisible());
+    }
+    const loginText = (await login.innerText().catch(() => "")).trim();
+    const signupText = (await signup.innerText().catch(() => "")).trim();
+    check(
+      R,
+      `${label} buyer buttons use compact labels`,
+      tiny ? (loginText === "Login" && /sign up/i.test(signupText)) : (loginText === "Buyer Login" && /create buyer account/i.test(signupText)),
+      `login="${loginText}" signup="${signupText}"`
+    );
+    const headerFits = await page.evaluate(() => {
+      const header = document.querySelector("header");
+      if (!header) return null;
+      return {
+        docOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+        headerWidth: header.getBoundingClientRect().width,
+      };
+    });
+    check(
+      R,
+      `${label} header fits without horizontal overflow`,
+      headerFits !== null && headerFits.headerWidth <= vp.width + 1 && !headerFits.docOverflow,
+      JSON.stringify(headerFits)
+    );
+    await ctx.close();
+  }
+
+  // ---------- R3: floating chat/voice launchers ----------------------------
+  {
+    const ctx = await newContext({ width: 320, height: 700 }, "widgets-320");
+    const page = await ctx.newPage();
+    const issues = await watch(page, "widgets-320");
+    await page.goto(`${BASE}/`, { waitUntil: "load", timeout: 60000 });
+    await page.waitForTimeout(1500);
+
+    const chatBtn = page.getByRole("button", { name: "Open Basera AI chat" });
+    const voiceBtn = page.getByRole("button", { name: "Open Basera voice assistant" });
+    check(R, "chat launcher rendered", (await chatBtn.count()) > 0 && (await chatBtn.isVisible()));
+    check(R, "voice launcher rendered", (await voiceBtn.count()) > 0 && (await voiceBtn.isVisible()));
+
+    const chatBox = await chatBtn.boundingBox().catch(() => null);
+    const voiceBox = await voiceBtn.boundingBox().catch(() => null);
+    const pair = chatBox && voiceBox
+      ? Math.max(0, Math.min(chatBox.x + chatBox.width, voiceBox.x + voiceBox.width) - Math.max(chatBox.x, voiceBox.x)) *
+        Math.max(0, Math.min(chatBox.y + chatBox.height, voiceBox.y + voiceBox.height) - Math.max(chatBox.y, voiceBox.y))
+      : null;
+    check(
+      R,
+      "stacked launchers do not overlap each other",
+      pair === 0,
+      JSON.stringify({ chat: chatBox, voice: voiceBox, overlapArea: pair })
+    );
+
+    // Open chat: panel appears, voice launcher gets out of the way.
+    await chatBtn.click();
+    await page.waitForTimeout(700);
+    const chatClose = page.getByRole("button", { name: "Close chat" });
+    check(R, "chat opens with a visual panel", await chatClose.isVisible());
+    check(R, "voice launcher hides while chat panel is open", (await voiceBtn.count()) === 0);
+    const chatPanelBounds = await page.evaluate(() => {
+      const panel = [...document.querySelectorAll("div.theme-light")].find((el) => getComputedStyle(el).position === "fixed");
+      if (!panel) return null;
+      const b = panel.getBoundingClientRect();
+      return { top: b.top, bottom: b.bottom, right: b.right, vh: innerHeight, vw: innerWidth };
+    });
+    check(
+      R,
+      "chat panel fits inside a 320x700 viewport",
+      chatPanelBounds !== null && chatPanelBounds.top >= -1 && chatPanelBounds.bottom <= chatPanelBounds.vh + 1 && chatPanelBounds.right <= chatPanelBounds.vw + 1,
+      JSON.stringify(chatPanelBounds)
+    );
+
+    // Close chat: voice launcher returns.
+    await chatClose.click();
+    await page.waitForTimeout(500);
+    check(R, "voice launcher returns when chat closes", (await voiceBtn.count()) > 0 && (await voiceBtn.isVisible()));
+
+    // Open voice: mutual close closes chat even if it were open, launcher hides.
+    await voiceBtn.click();
+    await page.waitForTimeout(900);
+    const voiceClose = page.getByRole("button", { name: "Close voice assistant" });
+    check(R, "voice opens with a visual panel", await voiceClose.isVisible());
+    // Mutual close folds the chat PANEL away. The chat launcher itself stays
+    // visible UNDER the voice panel by design (stacked column — the panel
+    // anchors >= 6rem, the bubble at 1.25rem; see public-voice-button.tsx).
+    check(
+      R,
+      "chat panel folds when voice opens (launcher stays stacked)",
+      (await chatClose.count()) === 0 && (await chatBtn.isVisible().catch(() => false)),
+      `chatCloseVisible=${await chatClose.count() > 0} chatLauncherVisible=${await chatBtn.isVisible().catch(() => false)}`
+    );
+    const voicePanelBounds = await page.evaluate(() => {
+      const panels = [...document.querySelectorAll("div.theme-light")];
+      const bottom = panels
+        .filter((el) => getComputedStyle(el).position === "fixed")
+        .map((el) => el.getBoundingClientRect())
+        .reduce((min, b) => Math.min(min, b.bottom), Infinity);
+      return { bottom, vh: innerHeight, vw: innerWidth, top: bottom === Infinity ? null : undefined };
+    });
+    check(
+      R,
+      "voice panel fits inside the viewport (bottom edge)",
+      voicePanelBounds.bottom <= voicePanelBounds.vh + 1,
+      JSON.stringify(voicePanelBounds)
+    );
+
+    // The voice panel content scrolls internally; try sending text to prove
+    // the panel is usable end to end (the isolated e2e workspace "basera"
+    // accepts sessions; even a graceful failure keeps the panel honest).
+    const turnDone = page
+      .waitForResponse((r) => r.url().includes("/api/voice/session") && r.request().method() === "POST", { timeout: 30000 })
+      .catch(() => null);
+    const voiceInput = page.locator('textarea[aria-label="Type your message instead of speaking"]').first();
+    check(R, "voice panel offers a text fallback input", (await voiceInput.count()) > 0);
+    if (await voiceInput.count()) {
+      await voiceInput.fill("Hi, I want a 3 BHK in Jaipur");
+      await page.getByRole("button", { name: /send/i }).first().click();
+      const resp = await turnDone;
+      check(
+        R,
+        "voice text fallback reaches the voice API",
+        !!resp && resp.status() >= 200 && resp.status() < 500,
+        resp ? `status=${resp.status()}` : "no request observed"
+      );
+    }
+
+    await voiceClose.click();
+    await page.waitForTimeout(500);
+    check(R, "both launchers visible after voice closes", (await voiceBtn.count()) > 0 && (await chatBtn.count()) > 0);
+    check(R, "widgets: no page exceptions", issues.pageErrors.length === 0, issues.pageErrors.join(" | "));
+    await shot(page, "regressions-widgets-320");
+    await ctx.close();
+  }
+
+  // ---------- R4: buyer-signup API error contract over real HTTP ----------
+  {
+    const ctx = await newContext(DESKTOP, "signup-api");
+    const page = await ctx.newPage();
+    await watch(page, "signup-api");
+    await page.goto(`${BASE}/`, { waitUntil: "load", timeout: 60000 });
+    const ts = Date.now();
+    const fresh = `qa-regression-${ts}@example.com`;
+    // Unique X-Forwarded-For per call so rate-limit buckets do not couple
+    // these probes to the other sections' signup traffic (limiter keys on
+    // the last XFF entry, per src/lib/rate-limit.ts).
+    const call = async (body, suffix) =>
+      page.evaluate(
+        async ({ base, body, ip }) => {
+          const r = await fetch(`${base}/api/auth/buyer-signup`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-forwarded-for": `${ip}` },
+            body: JSON.stringify(body),
+          });
+          let json = null;
+          try { json = await r.json(); } catch {}
+          return { status: r.status, body: json };
+        },
+        { base: BASE, body, ip: `10.207.${suffix}.7` }
+      );
+    const ok = await call({ name: "QA Regression Buyer", email: fresh, password: "Regression123!" }, 1);
+    check(R, "valid signup accepted (200)", ok.status === 200, JSON.stringify(ok).slice(0, 160));
+    const dup = await call({ name: "QA Regression Two", email: fresh, password: "Other45678!" }, 2);
+    check(R, "duplicate email -> 409 EMAIL_EXISTS", dup.status === 409 && dup.body?.code === "EMAIL_EXISTS", JSON.stringify(dup).slice(0, 160));
+    const dupCase = await call({ name: "QA Regression Three", email: fresh.toUpperCase(), password: "Other45678!" }, 3);
+    check(R, "case-insensitive duplicate -> 409", dupCase.status === 409, JSON.stringify(dupCase).slice(0, 160));
+    const badEmail = await call({ name: "QA Regression Four", email: "not-an-email", password: "Regression123!" }, 4);
+    check(R, "invalid email -> 400", badEmail.status === 400, JSON.stringify(badEmail).slice(0, 160));
+    const shortPass = await call({ name: "QA Regression Five", email: `qa-reg-short-${ts}@example.com`, password: "short" }, 5);
+    check(R, "short password -> 400", shortPass.status === 400, JSON.stringify(shortPass).slice(0, 160));
+    await ctx.close();
+  }
+
+  // ---------- R5: mobile journey renders in flow (no skeleton swap) --------
+  {
+    const ctx = await newContext({ width: 390, height: 844 }, "jr-390");
+    const page = await ctx.newPage();
+    await watch(page, "jr-390");
+    await page.goto(`${BASE}/`, { waitUntil: "load", timeout: 60000 });
+    await page.waitForTimeout(2000);
+    // Before hydration this section does not exist in the DOM at all when
+    // gated; since the fix it is server-rendered in flow. Its real height on
+    // phones is ~6000-7200px, versus the old 340vh skeleton at ~2870px.
+    const mobile = await page.evaluate(() => {
+      const journey = [...document.querySelectorAll("section")].find((s) => (s.className || "").includes("xl:h-[340vh]"));
+      if (!journey) return null;
+      const eyebrows = [...journey.querySelectorAll("p")].filter((p) => /0[1-5] \/ 05/.test(p.textContent || ""));
+      return { height: journey.getBoundingClientRect().height, docTop: journey.getBoundingClientRect().top + scrollY, eyebrows: eyebrows.length };
+    });
+    check(R, "mobile scroll-story exists in the DOM immediately", !!mobile && mobile.eyebrows === 5, JSON.stringify(mobile));
+    check(
+      R,
+      "mobile scroll-story reserves its real height (no short skeleton)",
+      !!mobile && mobile.height > 4500 && mobile.height < 12000,
+      `height=${mobile ? Math.round(mobile.height) : "none"} (skeleton was ~2870)`
+    );
+    check(
+      R,
+      "mobile scroll-story has no overflow after full scroll",
+      await (async () => {
+        if (!mobile) return false;
+        for (const p of [0.2, 0.5, 0.8]) await sampleJourney(page, mobile, p);
+        return page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
+      })()
+    );
+    await ctx.close();
+  }
+}
+
 (async () => {
   browser = await chromium.launch({
     channel: "chrome",
     headless: true,
     args: ["--use-fake-device-for-media-stream", "--enable-unsafe-swiftshader", "--no-sandbox"],
   });
-  const sections = [sectionStaffAuth, sectionBuyerAuth, sectionBuyerUX, sectionPropertyBuyer, sectionCRM, sectionPropertyMedia, sectionResponsive, sectionProtected, sectionSecurity, sectionFixes];
+  const allSections = [sectionStaffAuth, sectionBuyerAuth, sectionBuyerUX, sectionPropertyBuyer, sectionCRM, sectionPropertyMedia, sectionResponsive, sectionProtected, sectionSecurity, sectionFixes, sectionVisualRegressions];
+  // --sections=name1,name2 runs a subset (names are the section function
+  // names, e.g. sectionVisualRegressions). Dev-only convenience for iterating
+  // on one section; CI must run the full list.
+  const only = typeof args.sections === "string"
+    ? args.sections.split(",").map((s) => s.trim()).filter(Boolean)
+    : null;
+  const sections = only ? allSections.filter((fn) => only.includes(fn.name)) : allSections;
+  if (only && sections.length !== only.length) {
+    console.error(`[qa] unknown --sections: ${only.filter((n) => !allSections.some((fn) => fn.name === n)).join(", ")}`);
+    process.exit(2);
+  }
   for (const fn of sections) {
     try {
       await fn();

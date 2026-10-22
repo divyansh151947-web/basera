@@ -52,6 +52,20 @@ const config: Config = {
         "gradient-conic":
           "conic-gradient(from 180deg at 50% 50%, var(--tw-gradient-stops))",
       },
+      keyframes: {
+        // Ambient particles in the scroll-story (JourneySection). The spans
+        // still set their own animation-delay/duration inline (12-17s), which
+        // overrides the shorthand's duration — this just makes `animate-float`
+        // resolve (before this entry the class compiled to nothing and the
+        // particles sat motionless).
+        float: {
+          "0%, 100%": { transform: "translate3d(0, 0, 0)" },
+          "50%": { transform: "translate3d(6px, -18px, 0)" },
+        },
+      },
+      animation: {
+        float: "float 14s ease-in-out infinite",
+      },
     },
   },
   plugins: [],

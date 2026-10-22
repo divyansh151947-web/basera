@@ -16,6 +16,7 @@ import {
 import { WavPlayer } from "@/lib/voice/wav-player";
 import { VOICE_GREETING_TEXT } from "@/lib/voice/voice-greeting";
 import { VOICE_TOUR_EVENT, type VoiceClientAction } from "@/lib/ai/tour-navigation";
+import { isPublicOrgUnavailableError, PUBLIC_ORG_UNAVAILABLE_MESSAGE, resolvePublicChatOrgSlug } from "@/lib/public-chat";
 
 type VoiceMessage = {
   id: string;
@@ -82,8 +83,15 @@ function pickRecorderMime(): string {
  * run on one voice foundation. Language is detected server-side per turn, so
  * English, Hindi and Hinglish can be mixed in a single session.
  */
-export function VoiceSessionWidget({ defaultOrgSlug = "urbannest" }: { defaultOrgSlug?: string }) {
-  const [orgSlug, setOrgSlug] = useState(defaultOrgSlug);
+export function VoiceSessionWidget({ defaultOrgSlug }: { defaultOrgSlug?: string }) {
+  // Default slug: explicit prop wins, else the configured
+  // NEXT_PUBLIC_PUBLIC_ORG_SLUG, else the shipped default workspace. (Before,
+  // this was hardcoded to "urbannest" even when the deployment targeted a
+  // different workspace, which made the voice panel 404 with a raw
+  // "Unknown business".)
+  const [orgSlug, setOrgSlug] = useState(
+    () => defaultOrgSlug ?? resolvePublicChatOrgSlug(process.env.NEXT_PUBLIC_PUBLIC_ORG_SLUG)
+  );
   const [messages, setMessages] = useState<VoiceMessage[]>([]);
   const [input, setInput] = useState("");
   const [state, setState] = useState<VoiceLoopState>("idle");
@@ -437,6 +445,10 @@ export function VoiceSessionWidget({ defaultOrgSlug = "urbannest" }: { defaultOr
         } catch {
           /* keep default */
         }
+        // 404 "Unknown business" means the workspace slug has no org row in
+        // the database — show the honest "not connected yet" message instead
+        // of raw API jargon.
+        if (isPublicOrgUnavailableError(message)) message = PUBLIC_ORG_UNAVAILABLE_MESSAGE;
         setError(message);
         return null;
       }
@@ -574,7 +586,12 @@ export function VoiceSessionWidget({ defaultOrgSlug = "urbannest" }: { defaultOr
         be mixed freely in one conversation.
       </div>
 
-      <div className="flex h-[420px] max-h-[70vh] flex-col bg-[#f7f8f7]">
+      {/* Conversation is double-bounded: 420px design height, capped at 70vh
+          and never so tall that the header + tips + input would push the top
+          edge of the panel off a short viewport (e.g. landscape phones, where
+          70vh + the ~150px of fixed chrome would exceed the screen; the log
+          then scrolls internally). */}
+      <div className="flex h-[420px] max-h-[min(70vh,calc(100svh-18rem))] flex-col bg-[#f7f8f7]">
         <div className="flex-1 space-y-3 overflow-y-auto px-3.5 py-4" role="log" aria-live="polite" aria-label="Voice conversation">
           {!isLive && messages.length === 0 && (
             <div className="rounded-[18px] border border-line bg-white px-3.5 py-3 text-sm text-slate shadow-[0_2px_10px_rgba(16,26,23,0.05)]">

@@ -188,6 +188,13 @@ function killServer(child) {
     // .uploads), so the property-driven showcase plays a REAL uploaded file.
     ...(mediaRoot ? { MEDIA_STORAGE_DIR: mediaRoot } : {}),
     // Force offline mode: no paid AI call, no real email, ever.
+    // VOICE_PROVIDER itself must be pinned (not just the credentials): a
+    // developer .env value like VOICE_PROVIDER=gemini otherwise leaks into
+    // this server, the blanked GEMINI_API_KEY makes that provider fail
+    // closed (503 "not configured"), and the voice checks would report a
+    // harness bug as a product bug. getVoiceProviderName maps "" -> mock,
+    // the provider that exists exactly for offline QA.
+    VOICE_PROVIDER: "",
     OPENAI_API_KEY: "",
     ANTHROPIC_API_KEY: "",
     GEMINI_API_KEY: "",

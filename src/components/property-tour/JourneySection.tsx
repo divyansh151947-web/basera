@@ -36,6 +36,14 @@ const PARTICLE_DATA = [
 export function JourneySection() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [stage, setStage] = useState(0);
+  /**
+   * Mirror of `stage` for the scroll handler. The previous effect re-subscribed
+   * on every stage change (deps: [stage]) — every stage transition during the
+   * pinned story tore down and re-attached the scroll listener, and a fast
+   * scroll could race a re-subscription and miss a stage. Reading the latest
+   * index from the ref lets ONE listener live for the component's whole life.
+   */
+  const stageRef = useRef(0);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -48,21 +56,33 @@ export function JourneySection() {
     };
 
     let ticking = false;
-    const onScroll = () => {
+    let frame = 0;
+    const update = () => {
+      ticking = false;
+      const next = stageForProgress(readProgress());
+      if (next !== stageRef.current) {
+        stageRef.current = next;
+        setStage(next);
+      }
+    };
+    // One throttled handler for BOTH scroll and resize — resize changes
+    // viewport metrics (and therefore progress), so it needs a re-read.
+    const requestUpdate = () => {
       if (ticking) return;
       ticking = true;
-      requestAnimationFrame(() => {
-        const p = readProgress();
-        const nextStage = stageForProgress(p);
-        if (nextStage !== stage) setStage(nextStage);
-        ticking = false;
-      });
+      frame = requestAnimationFrame(update);
     };
 
-    window.addEventListener("scroll", onScroll, { passive: true });
-    onScroll();
-    return () => window.removeEventListener("scroll", onScroll);
-  }, [stage]);
+    window.addEventListener("scroll", requestUpdate, { passive: true });
+    window.addEventListener("resize", requestUpdate);
+    update();
+
+    return () => {
+      window.removeEventListener("scroll", requestUpdate);
+      window.removeEventListener("resize", requestUpdate);
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, []);
 
   const active = JOURNEY_STAGES[stage] ?? JOURNEY_STAGES[0];
 
@@ -71,16 +91,22 @@ export function JourneySection() {
       Below xl (phones, tablets, small laptops) this is a NORMAL vertical
       section: each stage renders its narrative followed by its visualization
       in document flow, so nothing can overlap. The pinned scroll-story below
-      only ever worked when both panels had ~1280px+ of horizontal room —
-      measured overlap at 320/360/375/390/414/430/768/1024 before this change.
+      only ever worked when both panels had ~1280px+ of horizontal room.
+      (Keeping the mobile flow split into per-stage blocks is also what keeps
+      this section's real height matched to its mobile layout.)
 
-      At xl+ the original pinned scroll-story is preserved exactly: the
-      wrapper is a sticky full-viewport stage and each stage's narrative and
-      visualization are absolutely-positioned overlays (left column + right
-      column). Because every stage item is `position: absolute` at xl+, it
-      contributes no layout height, so stage changes cannot shift anything —
-      the old `grid`/`gridArea` height-reservation trick (and its CLS comments)
-      is no longer needed.
+      At xl+ the pinned scroll-story is preserved, but the two panels are no
+      longer independent absolutely-positioned columns. Measured at 1280×800,
+      the old left column (max-w-2xl = 672px, left-anchored) plus the old
+      right column (max-w-4xl = 896px, right-anchored) needed 1568px of
+      viewport — more than a 1280/1366/1440 screen — so the narrative chips
+      row physically ran under the visualization card (64px overlap at 1280,
+      scrolling up AND down). Each stage overlay is now its own two-column
+      GRID (`minmax(0,2fr) | minmax(0,3fr)` inside the padded width), so the
+      columns can never exceed the viewport regardless of zoom or width:
+      the browser allocates exactly what fits. The overlay is still
+      `absolute inset-0` per stage (inactive stages stay `xl:invisible`),
+      so stage changes can never shift layout.
     */
     <section ref={containerRef} className="relative bg-[#0a0e16] xl:h-[340vh]">
       <div className="relative w-full overflow-hidden pt-14 pb-28 xl:sticky xl:top-0 xl:h-screen xl:p-0">
@@ -110,10 +136,13 @@ export function JourneySection() {
           {JOURNEY_STAGES.map((s) => (
             <div
               key={s.index}
-              className={`${s.index === active.index ? "" : "xl:invisible"} xl:absolute xl:inset-0`}
+              className={`${s.index === active.index ? "" : "xl:invisible"} xl:absolute xl:inset-0 xl:grid xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] xl:items-center xl:gap-6 xl:px-12 xl:pt-12 xl:pb-20`}
             >
-              {/* Narrative — in flow below xl; pinned left column at xl+ */}
-              <div className="max-w-xl p-6 md:p-10 xl:pointer-events-none xl:absolute xl:inset-y-0 xl:left-0 xl:flex xl:w-full xl:flex-col xl:justify-center xl:gap-3 xl:p-12 xl:max-w-2xl">
+              {/* Narrative — in flow below xl; left grid cell at xl+. The
+                  wrapper's grid can only hand this cell the space the viewport
+                  actually has, so the chips row can no longer run underneath
+                  the visualization. */}
+              <div className="max-w-xl p-6 md:p-10 xl:pointer-events-none xl:max-w-none xl:p-0">
                 <Reveal>
                   <p className="text-[11px] font-semibold uppercase tracking-[0.25em] text-[#ffdf9e]">0{s.index + 1} / 05 — {s.eyebrow}</p>
                   <h2 className="font-display text-3xl md:text-4xl lg:text-5xl leading-[1.05] text-white mt-2 max-w-lg">{s.title}</h2>
@@ -148,8 +177,11 @@ export function JourneySection() {
                 </Reveal>
               </div>
 
-              {/* Visualization — in flow below xl; pinned right column at xl+ */}
-              <div className="max-w-3xl mt-6 p-6 md:p-10 xl:pointer-events-none xl:absolute xl:inset-y-0 xl:right-0 xl:mt-0 xl:flex xl:w-full xl:flex-col xl:justify-center xl:items-end xl:gap-6 xl:p-12 xl:max-w-4xl">
+              {/* Visualization — in flow below xl; right grid cell at xl+.
+                  The card stays at its natural size; the cell bounds it, so at
+                  1280 the card's left edge sits well clear of the narrative
+                  chips (previously: 64px overlap at stage 0, 33px at stage 3). */}
+              <div className="max-w-3xl mt-6 p-6 md:p-10 xl:pointer-events-none xl:mt-0 xl:max-w-none xl:p-0">
                 <Reveal delayMs={80}>
                   <StageVisualization stage={s} />
                 </Reveal>
@@ -471,8 +503,9 @@ function ExploreVisualization({ data }: { data?: JourneyStage["leadData"] }) {
         </div>
       </div>
 
-      {/* CTA to actual 3D tour */}
-      <div className="mt-6 text-center">
+      {/* CTA to actual 3D tour. pointer-events-auto keeps it clickable even
+          though the pinned visualization cell is pointer-events-none at xl+. */}
+      <div className="pointer-events-auto mt-6 text-center">
         <Link
           href="/tour"
           className="inline-flex items-center gap-2 rounded-full border border-[#d8a94e]/40 bg-[#d8a94e]/10 px-6 py-3 text-sm font-semibold text-[#ffdf9e] hover:bg-[#d8a94e]/20 transition-all"

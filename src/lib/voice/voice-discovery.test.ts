@@ -38,9 +38,12 @@ describe("voice AI discoverability", () => {
     const page = read("app/page.tsx");
     expect(page).toMatch(/<PublicChatWidget \/>/);
     const chatIdx = page.indexOf("<PublicChatWidget />");
-    const voiceIdx = page.indexOf("<PublicVoiceButton />");
+    // The button receives the resolved public org slug (server-side) so the
+    // voice panel starts on the actual deployed workspace; it is still the
+    // immediate neighbor of the chat entry near the end of the page.
+    const voiceIdx = page.indexOf("<PublicVoiceButton");
     expect(voiceIdx).toBeGreaterThan(-1);
-    expect(Math.abs(voiceIdx - chatIdx)).toBeLessThan(120);
+    expect(Math.abs(voiceIdx - chatIdx)).toBeLessThan(600);
   });
 
   it("public voice entry reuses the existing widget/backend (no second system)", () => {
@@ -49,15 +52,27 @@ describe("voice AI discoverability", () => {
     // The wrapper makes NO backend calls of its own: all session/turn API
     // traffic stays inside the reused widget (same tenant model, same limits).
     expect(button).not.toMatch(/fetch\(|\/api\//);
-    // Same floating-bubble + popover treatment as the chat entry.
-    expect(button).toMatch(/fixed bottom-5 right-24 z-50[\s\S]*rounded-full bg-brand/);
-    expect(button).toMatch(/fixed bottom-24 right-4 z-50[\s\S]*max-w-\[430px\]/);
+    // Same floating-bubble + popover treatment as the chat entry. The two
+    // launchers are now STACKED (voice floats above chat in one right-aligned
+    // column) and coordinate open/close through window events, so the safe-area
+    // offsets moved into inline styles; this still locks: fixed positioning,
+    // the shared brand bubble, and the same popover rail (right-4 / max-w-430).
+    expect(button).toMatch(/fixed right-5 z-50[\s\S]*rounded-full bg-brand/);
+    expect(button).toMatch(/fixed right-4 z-50[\s\S]*max-w-\[430px\]/);
+    expect(button).toMatch(/safe-area-inset-bottom/);
+    // Still no secrets in the launcher itself; the org slug arrives as a prop.
     expect(button).not.toMatch(/API_KEY|SECRET|TOKEN|NEXT_PUBLIC_/);
   });
 
   it("existing public chatbot is untouched by the voice entry", () => {
     const widget = read("components/public-chat-widget.tsx");
-    expect(widget).not.toMatch(/voice|Voice|Mic|microphone/i);
+    // The chatbot grows no voice system of its own: no voice API routes, no
+    // mic/recording/speech surfaces. It MAY coordinate open/close with the
+    // floating voice launcher (they share the bottom-right slot), which is
+    // why a plain /voice/i ban no longer applies — only the functional
+    // surfaces are forbidden.
+    expect(widget).not.toMatch(/\/api\/voice|MediaRecorder|getUserMedia|speechSynthesis/i);
+    expect(widget).not.toMatch(/\bMic\b|microphone/i);
     expect(widget).toMatch(/\/api\/public\/chat/);
   });
 

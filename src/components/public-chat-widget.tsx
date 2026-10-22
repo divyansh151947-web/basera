@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { MessageSquareText, X, ArrowUpRight } from "lucide-react";
-import { resolvePublicChatOrgSlug } from "@/lib/public-chat";
+import { isPublicOrgUnavailableError, PUBLIC_ORG_UNAVAILABLE_MESSAGE, resolvePublicChatOrgSlug } from "@/lib/public-chat";
 
 const SUGGESTIONS = [
 	"3 BHK in Gurgaon under ₹1.5 Cr",
@@ -20,6 +20,15 @@ type ChatMessage = {
 
 /** Window event used by page CTAs (e.g. "Chat with AI Assistant") to open the widget. */
 export const OPEN_CHAT_EVENT = "basera:open-chat";
+
+/** Broadcast every time this widget opens or closes its panel.
+ *  The floating voice button listens for it so the two floating launchers
+ *  and panels never fight for the same bottom-right corner of the screen. */
+export const CHAT_OPEN_CHANGE_EVENT = "basera:chat-open-change";
+
+/** Fired by the floating voice button when its panel opens; this widget closes
+ *  itself in response so only one AI panel is ever open at once. */
+export const VOICE_OPEN_CHANGE_EVENT = "basera:voice-open-change";
 
 export interface OpenChatEventDetail {
 	propertyId?: string;
@@ -73,6 +82,23 @@ export function PublicChatWidget({ propertyId, contextLabel }: PublicChatWidgetP
 		return () => window.removeEventListener(OPEN_CHAT_EVENT, handleOpenEvent);
 	}, [propertyId]);
 
+	// If the floating voice panel opens, fold this panel away — the two fixed
+	// panels anchor to the same bottom-right corner and would stack on top of
+	// each other (both render at z-50).
+	useEffect(() => {
+		function handleVoiceOpen(event: Event) {
+			if ((event as CustomEvent<{ open?: boolean }>).detail?.open) setIsOpen(false);
+		}
+		window.addEventListener(VOICE_OPEN_CHANGE_EVENT, handleVoiceOpen);
+		return () => window.removeEventListener(VOICE_OPEN_CHANGE_EVENT, handleVoiceOpen);
+	}, []);
+
+	// Broadcast panel state so the voice launcher can get out of the way
+	// (it can't sit behind this panel while both are visible).
+	useEffect(() => {
+		window.dispatchEvent(new CustomEvent(CHAT_OPEN_CHANGE_EVENT, { detail: { open: isOpen } }));
+	}, [isOpen]);
+
 	async function sendMessage(rawText: string) {
 		const text = rawText.trim();
 		if (!text || isLoading) return;
@@ -102,8 +128,15 @@ export function PublicChatWidget({ propertyId, contextLabel }: PublicChatWidgetP
 
 			const data = await response.json().catch(() => null);
 			if (!response.ok || !data) {
+				// 404 "Unknown business" = the deployed slug has no workspace row in
+				// the database. Show the honest "not connected yet" message instead
+				// of the raw API error string.
 				throw new Error(
-					data && typeof data.error === "string" ? data.error : "Request failed"
+					isPublicOrgUnavailableError(data?.error)
+						? PUBLIC_ORG_UNAVAILABLE_MESSAGE
+						: data && typeof data.error === "string"
+							? data.error
+							: "Request failed"
 				);
 			}
 
@@ -127,18 +160,24 @@ export function PublicChatWidget({ propertyId, contextLabel }: PublicChatWidgetP
 				...prev,
 				{ id: `assistant-${Date.now()}`, role: "assistant", content: aiReply },
 			]);
-		} catch {
+		} catch (caught) {
+			// Config problems (e.g. the workspace slug isn't set up yet) surface
+			// their own honest message in the thread; everything else keeps the
+			// existing conversational recovery reply.
 			const recoverReply =
 				"I didn’t quite catch that. Tell me the city, BHK, or budget you’re considering, and I’ll continue from there.";
+			const configIssue =
+				caught instanceof Error && caught.message.includes("isn't connected");
+			const issueText = configIssue ? caught!.message : null;
 			setMessages((prev) => [
 				...prev,
 				{
 					id: `assistant-${Date.now()}`,
 					role: "assistant",
-					content: recoverReply,
+					content: issueText ?? recoverReply,
 				},
 			]);
-			setError("Message not sent — please try again in a moment.");
+			setError(issueText ?? "Message not sent — please try again in a moment.");
 		} finally {
 			setIsLoading(false);
 		}
@@ -193,7 +232,11 @@ export function PublicChatWidget({ propertyId, contextLabel }: PublicChatWidgetP
 						</button>
 					</div>
 
-					<div className="flex h-[500px] max-h-[75vh] flex-col bg-[#f7f8f7]">
+					{/* Height is double-bounded: 500px design height, but never more
+					    than 75vh — and never so tall that it would poke past the top
+					    of a short (landscape-phone) viewport, which would leave the
+					    header/close button off-screen. The conversation log scrolls. */}
+					<div className="flex h-[500px] max-h-[min(75vh,calc(100svh-9rem))] flex-col bg-[#f7f8f7]">
 						<div
 							className="flex-1 space-y-3 overflow-y-auto px-3.5 py-4"
 							role="log"

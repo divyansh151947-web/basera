@@ -10,7 +10,7 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
             <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-b from-[#e0b45c] to-[#8a6238] text-sm font-semibold text-[#1a1206] shadow-[0_8px_20px_rgba(216,169,78,0.28)]">
               B
             </span>
-            <span className="font-display text-xl tracking-wide text-white">Basera</span>
+            <span className="font-display text-xl tracking-wide text-white max-[419px]:text-lg">Basera</span>
           </Link>
 
           <nav aria-label="Primary" className="hidden items-center gap-7 text-[13px] font-medium text-white/65 lg:flex">
@@ -28,23 +28,25 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
             </Link>
           </nav>
 
-          {/* Three public entry points, always reachable: the two buyer links
-              shrink to short labels on narrow phones, and the staff link moves
-              into the mobile menu below `lg` so it is never hidden outright. */}
-          <div className="flex items-center gap-2 sm:gap-3">
+          {/* Three public entry points, always reachable: the two buyer buttons
+              render at every width — below `sm` they contract to short labels
+              ("Login"/"Sign Up") and tighter padding so even 320px fits them
+              next to the logo and menu (measured). The staff link moves into
+              the mobile menu below `lg` so it is never hidden outright. */}
+          <div className="flex items-center gap-1.5 sm:gap-3">
             <Link
               href="/buyer/login"
-              className="hidden min-[420px]:inline-flex rounded-lg border border-white/20 px-3 py-2 text-[13px] font-medium text-white/85 transition hover:border-white/45 hover:text-white sm:px-4"
+              className="inline-flex whitespace-nowrap rounded-lg border border-white/20 px-2.5 py-2 text-xs font-medium text-white/85 transition hover:border-white/45 hover:text-white sm:px-4 sm:text-[13px]"
             >
               <span className="hidden sm:inline">Buyer Login</span>
               <span className="sm:hidden">Login</span>
             </Link>
             <Link
               href="/buyer/signup"
-              className="hidden min-[420px]:inline-flex rounded-lg bg-white px-3 py-2 text-[13px] font-semibold text-[#0a0e16] transition hover:bg-white/90 sm:px-4"
+              className="inline-flex whitespace-nowrap rounded-lg bg-white px-2.5 py-2 text-xs font-semibold text-[#0a0e16] transition hover:bg-white/90 sm:px-4 sm:text-[13px]"
             >
               <span className="hidden sm:inline">Create Buyer Account</span>
-              <span className="sm:hidden">Sign up</span>
+              <span className="sm:hidden">Sign Up</span>
             </Link>
             <Link
               href="/login"
