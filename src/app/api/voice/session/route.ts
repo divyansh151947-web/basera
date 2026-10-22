@@ -41,7 +41,13 @@ export async function POST(req: NextRequest) {
   const org = (
     await db.select().from(organizations).where(eq(organizations.slug, parsed.data.orgSlug)).limit(1)
   )[0];
-  if (!org) return NextResponse.json({ error: "Unknown business" }, { status: 404 });
+  if (!org) {
+    console.warn("[voice/session] public workspace not found in database", { orgSlug: parsed.data.orgSlug });
+    return NextResponse.json(
+      { error: "Unknown business", code: "ORG_NOT_FOUND", orgSlug: parsed.data.orgSlug },
+      { status: 404 }
+    );
+  }
 
   if (!parsed.data.leadId && !parsed.data.conversationId) {
     const farmingCheck = await voiceNewSessionLimiter.check(`voice:new-session:${ip}`);

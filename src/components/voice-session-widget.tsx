@@ -282,7 +282,14 @@ export function VoiceSessionWidget({ defaultOrgSlug }: { defaultOrgSlug?: string
         reader.readAsDataURL(blob);
       };
       recorder.onerror = () => onError(new Error("Recording failed."));
-      recorder.start(250);
+      // Some browsers (notably Safari/iOS versions) reject the timeslice
+      // argument; fall back to a single-chunk recording so the turn still
+      // gets audio instead of dying on recorder.start().
+      try {
+        recorder.start(250);
+      } catch {
+        recorder.start();
+      }
       return {
         get state() {
           return recorder.state as "inactive" | "recording" | "paused";
@@ -439,16 +446,20 @@ export function VoiceSessionWidget({ defaultOrgSlug }: { defaultOrgSlug?: string
       });
       if (!response.ok) {
         let message = `Voice is unavailable (${response.status}).`;
+        let orgNotFound = false;
         try {
           const payload = await response.json();
           if (payload?.error) message = String(payload.error);
+          // Machine-readable signal from ORG_NOT_FOUND responses (backwards
+          // compatible with the older error-string-only mapping).
+          orgNotFound = payload?.code === "ORG_NOT_FOUND" || isPublicOrgUnavailableError(message);
         } catch {
           /* keep default */
         }
-        // 404 "Unknown business" means the workspace slug has no org row in
+        // 404 ORG_NOT_FOUND means the workspace slug has no org row in
         // the database — show the honest "not connected yet" message instead
         // of raw API jargon.
-        if (isPublicOrgUnavailableError(message)) message = PUBLIC_ORG_UNAVAILABLE_MESSAGE;
+        if (orgNotFound) message = PUBLIC_ORG_UNAVAILABLE_MESSAGE;
         setError(message);
         return null;
       }

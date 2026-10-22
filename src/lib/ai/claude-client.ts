@@ -14,7 +14,10 @@ import { fetchWithTimeout, providerTimeoutMs } from "./fetch-timeout";
  * mocked, per the project's "no fake functionality" requirement.
  */
 
-const MODEL = "claude-sonnet-4-6";
+// Model override via env (mirrors OPENAI_MODEL / GEMINI_CHAT_MODEL) so a
+// stale/renamed Anthropic model can be fixed in deployment config without a
+// code change. Default keeps the currently-shipping model.
+const MODEL = process.env.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-6";
 
 export function aiIsConfigured() {
   return Boolean(process.env.ANTHROPIC_API_KEY);

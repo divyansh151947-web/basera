@@ -13,6 +13,10 @@ export interface WavPlayerCallbacks {
 
 export class WavPlayer {
   private audio: HTMLAudioElement | null = null;
+  /** Object URL of the in-flight clip; revoked on stop when playback was
+   *  interrupted so no blob URL can leak (cleanup only runs on natural
+   *  end/error). */
+  private currentUrl: string | null = null;
   private callbacks: WavPlayerCallbacks;
 
   constructor(callbacks: WavPlayerCallbacks) {
@@ -27,6 +31,7 @@ export class WavPlayer {
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
         const url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
+        this.currentUrl = url;
 
         let el = this.audio;
         if (!el) {
@@ -36,6 +41,7 @@ export class WavPlayer {
 
         const cleanup = () => {
           URL.revokeObjectURL(url);
+          this.currentUrl = null;
           if (this.audio) {
             this.audio.onended = null;
             this.audio.onerror = null;
@@ -86,6 +92,16 @@ export class WavPlayer {
         // Best effort
       }
       this.audio = null;
+    }
+    // An interrupted clip can never reach its onended/onerror cleanup, so its
+    // object URL must be revoked here too.
+    if (this.currentUrl) {
+      try {
+        URL.revokeObjectURL(this.currentUrl);
+      } catch {
+        // Best effort
+      }
+      this.currentUrl = null;
     }
   }
 

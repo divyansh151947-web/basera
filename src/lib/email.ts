@@ -107,6 +107,19 @@ export function getSenderDomain(from?: string) {
   return match ? match[1].toLowerCase() : "unknown";
 }
 
+/** Sender domain of the provider that would ACTUALLY deliver (smtp > resend
+ *  > none) for diagnostics — domain only, never the full address/credentials. */
+export function getActiveSenderDomain(): string {
+  if (hasSmtpConfig()) {
+    const smtp = getSmtpConfig();
+    return getSenderDomain(smtp ? smtp.from : undefined);
+  }
+  if (hasEmailProviderConfig()) {
+    return getSenderDomain(getResendFromAddress());
+  }
+  return "none";
+}
+
 /**
  * Safe runtime diagnostics for the email subsystem. Contains NO secrets,
  * tokens, URLs, or recipient addresses — safe to log and to assert in
@@ -251,7 +264,9 @@ export async function sendPasswordResetEmail({
   }
 
   const resetUrl = getResetPasswordUrl(token);
-  const displayName = name?.trim() || "there";
+  // HTML-escape the display name like the verification email does — a user
+  // name containing markup must not become markup inside an HTML email.
+  const displayName = (name?.trim() || "there").replace(/[<>&"]/g, "");
 
   const html = `
     <div style="font-family:Arial,Helvetica,sans-serif; background:#f5f7f8; padding:32px 16px; color:#102b3d;">

@@ -320,6 +320,11 @@ export const verifyTokenLimiter = createRateLimiter({ windowMs: HOUR, max: 10 },
 export const verifyResendIpLimiter = createRateLimiter({ windowMs: HOUR, max: 30 }, "verify-resend-ip");
 export const verifyResendEmailLimiter = createRateLimiter({ windowMs: HOUR, max: 5 }, "verify-resend-email");
 
+/** Safe diagnostics surface (GET /api/diagnostics): unauthenticated by design
+ *  (the OWNER needs to read deployment truth without shell access), so it is
+ *  burst-limited and capped per IP. Returns booleans/provider names only. */
+export const diagnosticsIpLimiter = createRateLimiter({ windowMs: MINUTE, max: 6 }, "diagnostics-ip");
+
 /** Public chat: per-IP burst + daily budgets. */
 export const chatIpMinuteLimiter = createRateLimiter({ windowMs: MINUTE, max: 30 }, "chat-ip-minute");
 export const chatIpDayLimiter = createRateLimiter({ windowMs: DAY, max: 400 }, "chat-ip-day");

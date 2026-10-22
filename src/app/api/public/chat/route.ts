@@ -86,7 +86,12 @@ export async function POST(req: NextRequest) {
   const { orgSlug, content, conversationId, leadId, propertyId } = parsed.data;
 
   const org = (await db.select().from(organizations).where(eq(organizations.slug, orgSlug)).limit(1))[0];
-  if (!org) return NextResponse.json({ error: "Unknown business" }, { status: 404 });
+  if (!org) {
+    // Diagnostic (no secrets): the deployed public workspace slug has no
+    // organization row — the #1 cause of a totally dead public chat.
+    console.warn("[public/chat] public workspace not found in database", { orgSlug });
+    return NextResponse.json({ error: "Unknown business", code: "ORG_NOT_FOUND", orgSlug }, { status: 404 });
+  }
 
   // Resolve + verify the property context before any conversation work: an
   // unknown/hidden/ineligible id is a controlled 404 (never silently used).
@@ -206,7 +211,10 @@ export async function GET(req: NextRequest) {
   if (!conversationId || !orgSlug || !leadId) return NextResponse.json({ error: "Missing params" }, { status: 400 });
 
   const org = (await db.select().from(organizations).where(eq(organizations.slug, orgSlug)).limit(1))[0];
-  if (!org) return NextResponse.json({ error: "Unknown business" }, { status: 404 });
+  if (!org) {
+    console.warn("[public/chat] public workspace not found in database", { orgSlug });
+    return NextResponse.json({ error: "Unknown business", code: "ORG_NOT_FOUND", orgSlug }, { status: 404 });
+  }
 
   const conversation = await getConversation(org.id, conversationId);
   if (!conversation || conversation.leadId !== leadId) return NextResponse.json({ error: "Not found" }, { status: 404 });

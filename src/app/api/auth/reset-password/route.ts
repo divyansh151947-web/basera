@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { db } from "@/db/client";
 import { passwordResetTokens, users } from "@/db/schema";
 import { validatePasswordResetInput } from "@/lib/validation";
@@ -57,13 +57,35 @@ export async function POST(req: NextRequest) {
   const passwordHash = await bcrypt.hash(String(body.password), 12);
   const resetTime = new Date().toISOString();
 
+  // D-2: single-use under concurrency. Claim the row atomically BEFORE
+  // mutating the password: the conditional `usedAt IS NULL` update wins for
+  // exactly one racing caller (the loser gets no claimed row and the generic
+  // invalid-token response). A claimed-but-later-failed password write burns
+  // the token — the user can request a fresh one — which is why claiming
+  // happens first: it is what makes double-consumption impossible.
+  const claim = await db
+    .update(passwordResetTokens)
+    .set({ usedAt: resetTime })
+    .where(and(eq(passwordResetTokens.id, matchingToken.id), isNull(passwordResetTokens.usedAt)))
+    .returning({ id: passwordResetTokens.id });
+
+  if (claim.length === 0) {
+    console.warn("[auth] Password reset rejected: token already consumed concurrently.", {
+      tokenProvided: Boolean(rawToken),
+      tokenLength: rawToken.length,
+    });
+    return NextResponse.json({ error: "This reset link is invalid or expired.", code: "INVALID_RESET_TOKEN" }, { status: 400 });
+  }
+
   await db.update(users)
     .set({ passwordHash, updatedAt: resetTime })
     .where(eq(users.id, matchingToken.userId));
 
+  // Stamp all sibling live rows (survivors from re-issued links) so the
+  // latest request is the only valid reset credential for this account.
   await db.update(passwordResetTokens)
     .set({ usedAt: resetTime })
-    .where(eq(passwordResetTokens.userId, matchingToken.userId));
+    .where(and(eq(passwordResetTokens.userId, matchingToken.userId), isNull(passwordResetTokens.usedAt)));
 
   return NextResponse.json({ ok: true });
 }

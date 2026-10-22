@@ -128,11 +128,11 @@ export function PublicChatWidget({ propertyId, contextLabel }: PublicChatWidgetP
 
 			const data = await response.json().catch(() => null);
 			if (!response.ok || !data) {
-				// 404 "Unknown business" = the deployed slug has no workspace row in
+				// 404 ORG_NOT_FOUND = the deployed slug has no workspace row in
 				// the database. Show the honest "not connected yet" message instead
 				// of the raw API error string.
 				throw new Error(
-					isPublicOrgUnavailableError(data?.error)
+					data?.code === "ORG_NOT_FOUND" || isPublicOrgUnavailableError(data?.error)
 						? PUBLIC_ORG_UNAVAILABLE_MESSAGE
 						: data && typeof data.error === "string"
 							? data.error
