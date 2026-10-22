@@ -3,7 +3,7 @@ import bcrypt from "bcryptjs";
 import { db } from "@/db/client";
 import { users } from "@/db/schema";
 import { eq, sql } from "drizzle-orm";
-import { normalizeBuyerSignupInput, validateBuyerSignupInput, buyerSignupSchema } from "@/lib/validation";
+import { isUniqueViolation, normalizeBuyerSignupInput, validateBuyerSignupInput, buyerSignupSchema } from "@/lib/validation";
 import { getClientIp, rateLimitedResponse, signupIpLimiter } from "@/lib/rate-limit";
 import { createEmailVerification } from "@/lib/email-verification";
 import { sendVerificationEmail } from "@/lib/email";
@@ -42,14 +42,29 @@ export async function POST(req: NextRequest) {
   }
 
   const passwordHash = await bcrypt.hash(password, 12);
-  const [newUser] = await db.insert(users).values({
-    organizationId: null, // Buyers don't belong to an organization
-    name,
-    email,
-    phone: phone ?? null,
-    passwordHash,
-    role: "BUYER",
-  }).returning();
+  let newUser;
+  try {
+    [newUser] = await db.insert(users).values({
+      organizationId: null, // Buyers don't belong to an organization
+      name,
+      email,
+      phone: phone ?? null,
+      passwordHash,
+      role: "BUYER",
+    }).returning();
+  } catch (error) {
+    // Race-safe backstop: a concurrent request may have won the unique email
+    // insert first — map constraint failures to the same safe duplicate
+    // message instead of leaking database errors or returning 500.
+    if (isUniqueViolation(error)) {
+      return NextResponse.json(
+        { error: "This email is already registered. Please use another email or log in.", code: "EMAIL_EXISTS" },
+        { status: 409 }
+      );
+    }
+    console.error("[auth] Buyer signup insert failed.", { error: error instanceof Error ? error.message : "unknown" });
+    return NextResponse.json({ error: "Something went wrong. Please try again." }, { status: 500 });
+  }
 
   // Email verification
   try {

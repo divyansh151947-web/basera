@@ -278,7 +278,7 @@ export default async function Home({
 					}}
 				/>
 			<section aria-label="Basera cinematic hero" className="relative flex min-h-[100svh] w-full items-center overflow-hidden bg-[#0a0e16]">
-				<div className="absolute inset-0">
+				<div className="absolute inset-0 overflow-hidden">
 					<Image
 						src="/hero-villa.jpg"
 						alt="Modern luxury villa at golden hour, shown in Basera's live 3D property tour"
