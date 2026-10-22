@@ -108,7 +108,7 @@ export function JourneySection() {
       `absolute inset-0` per stage (inactive stages stay `xl:invisible`),
       so stage changes can never shift layout.
     */
-    <section ref={containerRef} className="relative bg-[#0a0e16] xl:h-[340vh]">
+    <section ref={containerRef} data-story-root className="relative bg-[#0a0e16] xl:h-[340vh]">
       <div className="relative w-full overflow-hidden pt-14 pb-28 xl:sticky xl:top-0 xl:h-screen xl:p-0">
         {/* Cinematic atmospheric backdrop — pure CSS, no WebGL */}
         <div className="pointer-events-none absolute inset-0" style={{ background: "linear-gradient(180deg, rgba(255,170,100,0.10) 0%, rgba(20,26,44,0.06) 45%, rgba(10,12,22,0.22) 100%)", mixBlendMode: "soft-light" }} />
@@ -136,6 +136,7 @@ export function JourneySection() {
           {JOURNEY_STAGES.map((s) => (
             <div
               key={s.index}
+              data-journey-stage={s.index}
               className={`${s.index === active.index ? "" : "xl:invisible"} xl:absolute xl:inset-0 xl:grid xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] xl:items-center xl:gap-6 xl:px-12 xl:pt-12 xl:pb-20`}
             >
               {/* Narrative — in flow below xl; left grid cell at xl+. The
@@ -282,7 +283,7 @@ function DiscoverVisualization({ data }: { data?: JourneyStage["leadData"] }) {
               1-up on the smallest phones; 2-up ≥400px and 4-up at md are unchanged. */}
           <div className="grid max-[399px]:grid-cols-1 grid-cols-2 md:grid-cols-4 gap-3 pt-4 border-t border-white/10">
             {Object.entries(extracted).map(([key, value]) => (
-              <div key={key} className="text-center p-4 rounded-xl bg-white/[0.03] border border-white/5 hover:border-[#d8a94e]/30 hover:bg-white/[0.05] transition-all duration-300">
+              <div key={key} className="text-center p-4 rounded-xl bg-white/[0.03] border border-white/5 hover:border-[#d8a94e]/30 hover:bg-white/[0.05] transition duration-300">
                 <p className="font-display text-2xl md:text-3xl text-[#ffdf9e] font-medium">{value}</p>
                 <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-white/50 mt-1 break-words">{key}</p>
               </div>
@@ -351,7 +352,7 @@ function MatchVisualization({ data }: { data?: JourneyStage["leadData"] }) {
           text clipped — stack to 1-up on small phones. */}
       <div className="mt-6 grid max-[379px]:grid-cols-1 grid-cols-2 gap-3">
         {alternatives.map((prop, i) => (
-          <div key={prop.name} className="rounded-xl border border-white/10 bg-white/[0.03] overflow-hidden hover:border-white/20 hover:bg-white/[0.05] transition-all duration-300 group">
+          <div key={prop.name} className="rounded-xl border border-white/10 bg-white/[0.03] overflow-hidden hover:border-white/20 hover:bg-white/[0.05] transition duration-300 group">
             <div className="relative h-32 overflow-hidden">
               <Image
                 src={prop.image ?? "https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&w=800&q=70"}
@@ -417,10 +418,10 @@ function IntelligenceVisualization({ data }: { data?: JourneyStage["leadData"] }
           {highlights.map((highlight, i) => (
             <div
               key={i}
-              className="flex items-start gap-4 p-4 rounded-xl bg-white/[0.02] border border-white/5 hover:border-[#d8a94e]/20 hover:bg-white/[0.04] transition-all duration-300 group"
+              className="flex items-start gap-4 p-4 rounded-xl bg-white/[0.02] border border-white/5 hover:border-[#d8a94e]/20 hover:bg-white/[0.04] transition duration-300 group"
               style={{ animationDelay: `${i * 80}ms` }}
             >
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#d8a94e]/15 text-[#ffdf9e] group-hover:bg-[#d8a94e]/30 group-hover:scale-110 transition-all duration-300">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#d8a94e]/15 text-[#ffdf9e] group-hover:bg-[#d8a94e]/30 group-hover:scale-110 transition duration-300">
                 <CheckCircle2 size={20} />
               </div>
               <p className="text-base md:text-lg text-white/90 leading-relaxed pt-1">{highlight}</p>
@@ -492,7 +493,7 @@ function ExploreVisualization({ data }: { data?: JourneyStage["leadData"] }) {
               1-up on small phones (2-up from 408px is unchanged). */}
           <div className="grid max-[407px]:grid-cols-1 grid-cols-2 gap-3">
             {highlights.map((h, i) => (
-              <div key={i} className="flex items-center gap-3 p-3 rounded-xl bg-white/[0.03] border border-white/5 hover:border-white/10 hover:bg-white/[0.05] transition-all">
+              <div key={i} className="flex items-center gap-3 p-3 rounded-xl bg-white/[0.03] border border-white/5 hover:border-white/10 hover:bg-white/[0.05] transition">
                 <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#d8a94e]/15 text-[#ffdf9e]">
                   <Layers size={18} />
                 </div>
@@ -508,7 +509,7 @@ function ExploreVisualization({ data }: { data?: JourneyStage["leadData"] }) {
       <div className="pointer-events-auto mt-6 text-center">
         <Link
           href="/tour"
-          className="inline-flex items-center gap-2 rounded-full border border-[#d8a94e]/40 bg-[#d8a94e]/10 px-6 py-3 text-sm font-semibold text-[#ffdf9e] hover:bg-[#d8a94e]/20 transition-all"
+          className="inline-flex items-center gap-2 rounded-full border border-[#d8a94e]/40 bg-[#d8a94e]/10 px-6 py-3 text-sm font-semibold text-[#ffdf9e] hover:bg-[#d8a94e]/20 transition"
         >
           <Sparkles size={16} />
           Explore in 3D
@@ -548,7 +549,7 @@ function ConvertVisualization({ data }: { data?: JourneyStage["leadData"] }) {
               )}
 
               {/* Step circle */}
-              <div className="relative flex h-22 w-22 shrink-0 items-center justify-center rounded-full border-2 transition-all duration-300 group-hover:scale-110 z-10"
+              <div className="relative flex h-22 w-22 shrink-0 items-center justify-center rounded-full border-2 transition duration-300 group-hover:scale-110 z-10"
                 style={{
                   borderColor: i === steps.length - 1 ? "#d8a94e" : "rgba(216,169,78,0.3)",
                   backgroundColor: i === steps.length - 1 ? "#d8a94e" : "transparent",
@@ -589,7 +590,7 @@ function ConvertVisualization({ data }: { data?: JourneyStage["leadData"] }) {
 
 function MetricCard({ label, value, icon }: { label: string; value: string; icon: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-center hover:border-[#d8a94e]/30 hover:bg-white/[0.05] transition-all">
+    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-center hover:border-[#d8a94e]/30 hover:bg-white/[0.05] transition">
       <div className="flex items-center justify-center gap-2 text-[#ffdf9e] mb-2">{icon}</div>
       <p className="font-display text-2xl text-[#ffdf9e]">{value}</p>
       <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-white/50 mt-1">{label}</p>

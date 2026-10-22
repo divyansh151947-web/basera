@@ -1781,6 +1781,77 @@ async function sectionVisualRegressions() {
       (up.collisions || []).length === 0,
       (up.collisions || []).slice(0, 4).map((c) => `stage=${c.stage} ${c.text} x ${c.viz}`) .join(" | ") || ""
     );
+
+    // Ghost check: stage overlays flip with `visibility`, and any stage content
+    // that still transitions `visibility` (Tailwind `transition-all`) keeps
+    // PAINTING for the whole transition duration after a flip — the outgoing
+    // stage's cards/tiles/chips then overlap the incoming stage (reproduced on
+    // the live site). Probe right inside that window: cross each stage
+    // boundary with a real scroll event, wait ~180ms (< the 300-500ms
+    // transition durations), then assert no element whose OWN computed
+    // visibility is "visible" lives under an inactive stage overlay. Ancestor
+    // chains must NOT be trusted here: the leak is exactly a "hidden ancestor,
+    // visible descendant" state. (globals.css strips visibility from
+    // transition-property inside stage overlays so this must stay empty.)
+    const ghostProbe = async (p, dir) => {
+      await page.evaluate(
+        ({ docTop, vh, height, p }) => {
+          window.scrollTo(0, Math.max(0, Math.round(docTop - vh * 0.5 + p * (height - vh))));
+        },
+        { ...geo, p }
+      );
+      await page.waitForTimeout(180);
+      return page.evaluate(() => {
+        const journey = [...document.querySelectorAll("section")].find((s) => (s.className || "").includes("xl:h-[340vh]"));
+        if (!journey) return { error: "no journey section" };
+        const stageOverlays = [...journey.querySelectorAll("[data-journey-stage]")];
+        if (!stageOverlays.length) return { error: "no stage overlays (harness out of date)" };
+        const ghostOf = (el) => {
+          let n = el.parentElement;
+          while (n && n !== journey.firstElementChild) {
+            if (n.hasAttribute("data-journey-stage")) {
+              return getComputedStyle(n).visibility === "hidden" ? n : null;
+            }
+            n = n.parentElement;
+          }
+          return null;
+        };
+        const ghosts = [];
+        const walker = document.createTreeWalker(journey.firstElementChild, NodeFilter.SHOW_ELEMENT);
+        let node = walker.currentNode;
+        while (node) {
+          const c = getComputedStyle(node);
+          if (c.visibility === "visible" && c.opacity !== "0" && ghostOf(node)) {
+            const b = node.getBoundingClientRect();
+            if (b.width > 1 && b.height > 1) {
+              ghosts.push({
+                cls: String(node.className).slice(0, 50),
+                text: (node.textContent || "").trim().slice(0, 28),
+                ownTransition: getComputedStyle(node).transitionProperty.slice(0, 60),
+                rect: [Math.round(b.x), Math.round(b.y), Math.round(b.width), Math.round(b.height)],
+              });
+            }
+          }
+          node = walker.nextNode();
+        }
+        return { ghosts: ghosts.slice(0, 12), total: ghosts.length };
+      }).then((r) => ({ p, dir, ...r }));
+    };
+    const flipPoints = [0.199, 0.201, 0.399, 0.401, 0.599, 0.601, 0.799, 0.801];
+    const ghostRuns = [];
+    for (const p of flipPoints) ghostRuns.push(await ghostProbe(p, "down"));
+    // and one full down-then-up boundary pass (the leak reproduced both ways)
+    for (const p of [0.801, 0.799, 0.601, 0.599, 0.401, 0.399, 0.201, 0.199]) ghostRuns.push(await ghostProbe(p, "up"));
+    const ghostHits = ghostRuns.filter((g) => g.ghosts && g.ghosts.length);
+    check(
+      R,
+      `${width}px story: outgoing stage paints nothing after each stage flip (ghost probe)`,
+      ghostHits.length === 0,
+      (ghostHits[0]
+        ? `p=${ghostHits[0].p} (${ghostHits[0].dir}) ${JSON.stringify(ghostHits[0].ghosts.slice(0, 2)).slice(0, 220)}`
+        : "")
+    );
+
     await shot(page, `regressions-journey-${width}`);
     await ctx.close();
   }

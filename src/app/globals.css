@@ -640,6 +640,33 @@
 }
 
 /* ==========================================================================
+   Scroll-story stage flips: keep `visibility` out of descendant transitions
+   --------------------------------------------------------------------------
+   Each pinned-story stage overlay flips with `visibility` (`.xl\:invisible`
+   on the outgoing wrapper). Tailwind's `transition-all` ALSO transitions
+   `visibility`: when that inherited value flips, every `transition-all`
+   descendant starts its OWN visibility transition, and per CSS transitions
+   a visibility step transition KEEPS THE OLD VALUE (visible) for the whole
+   duration (300-500ms here). Result: the outgoing stage's cards, tiles,
+   chips and labels keep painting THROUGH the incoming stage for a few
+   hundred ms — reproduced on the live site during every stage transition
+   (desktop pinned story and scroll-through on mobile flow).
+   Fix scoped to the story: replace any `transition-property: all` inside a
+   stage overlay with the default (visibility-free) list, so `visibility`
+   changes are instant while hover/scroll animations (colors, borders,
+   shadows, transforms, opacity, filters) are unchanged. The story's
+   progress dots sit OUTSIDE the stage overlays and keep their `width`
+   transition (`transition-all` on the dot spans is intentional).
+   This rule is deliberately UNLAYERED (outside any @layer): unlayered author
+   styles beat Tailwind's layered `utilities`, regardless of specificity, so
+   the override cannot lose the cascade against `.transition-all`.
+   ========================================================================== */
+section[data-story-root] [data-journey-stage] .transition-all {
+  transition-property: color, background-color, border-color, text-decoration-color,
+    fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter;
+}
+
+/* ==========================================================================
    KEYFRAMES
    ========================================================================== */
 
