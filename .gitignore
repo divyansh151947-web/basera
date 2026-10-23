@@ -20,3 +20,6 @@ resetpage.html
 # Editor/manual backup copies of source — never deployable.
 *.bak
 *.corrupt-backup
+
+.vercel
+.env*

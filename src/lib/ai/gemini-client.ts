@@ -50,7 +50,11 @@ function primaryChatModel(): string {
   return process.env.GEMINI_CHAT_MODEL?.trim() || "gemini-3.8-flash";
 }
 
-const DEFAULT_CHAT_FALLBACK_MODELS = ["gemini-3.5-flash", "gemini-1.5-flash", "gemini-1.5-flash-8b"];
+// Verified against the live models list for this key: gemini-1.5-flash* and
+// gemini-2.5-flash return 404 (retired), so only models that still serve
+// generateContent belong here. Lite models carry their own free-tier quota
+// buckets, which is what keeps the chain alive after the flash aliases 429.
+const DEFAULT_CHAT_FALLBACK_MODELS = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-flash-lite-latest"];
 
 function resolveChatModelChain(): string[] {
   const raw = process.env.GEMINI_CHAT_FALLBACK_MODELS;
@@ -102,6 +106,10 @@ function toError(status: number | null, body?: unknown): Error {
 }
 
 function isRetryableError(status: number | null, body?: unknown): boolean {
+  // 404 on /models/{model}:generateContent means the model id no longer exists
+  // for this key (retired alias). Skip to the next model instead of aborting
+  // the whole chain on a dead entry.
+  if (status === 404) return true;
   // Retry on quota exhaustion (429 with quota message)
   if (status === 429) {
     const msg = body && typeof body === "object" && "error" in body
@@ -182,7 +190,13 @@ export async function callGemini(params: GeminiCallParams): Promise<GeminiCallRe
 
     const data = (await res.json().catch(() => null)) as GeminiGenerateContentResponse | null;
     const text = data?.candidates?.[0]?.content?.parts?.map((p) => typeof p.text === "string" ? p.text : "").join("").trim() ?? "";
-    if (!text) throw new Error("Gemini AI produced no response. Please try again.");
+    if (!text) {
+      // A 200 with no usable text (empty parts / MAX_TOKENS) should not abort
+      // the chain either — let the next model answer.
+      lastError = new Error("Gemini AI produced no response. Please try again.");
+      console.warn("[gemini-client] Empty response, trying fallback", { model, nextModel: models[models.indexOf(model) + 1] });
+      continue;
+    }
     if (model !== models[0]) {
       console.info("[gemini-client] Fallback model succeeded", { model });
     }

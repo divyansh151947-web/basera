@@ -279,7 +279,7 @@ export function toPlayableWav(bytes: Buffer, mimeType?: string | null): Buffer {
  *  UNAVAILABLE, so a single default model stops working partway through the
  *  day. Falling back stays inside the same vendor and the same free tier, so it
  *  never creates surprise cost. Override or disable with the env vars below. */
-const DEFAULT_STT_FALLBACK_MODELS = ["gemini-3.6-flash", "gemini-3.8-flash"];
+const DEFAULT_STT_FALLBACK_MODELS = ["gemini-3.5-flash-lite", "gemini-3.6-flash"];
 const DEFAULT_TTS_FALLBACK_MODELS = ["gemini-3.1-flash-tts-preview", "gemini-3.8-flash-tts"];
 
 /** Primary first, then fallbacks. When the env var is PRESENT its value is
@@ -306,7 +306,15 @@ class ThrottleError extends Error {}
 
 function asThrottleError(err: unknown): ThrottleError | null {
   if (!(err instanceof Error)) return null;
-  if (!/quota|rate-limited|rate limit|temporarily unavailable|provider capacity|failed temporarily|resource\.exhausted/i.test(err.message)) {
+  // Timeouts count: free-tier audio turns can exceed the per-request budget on
+  // one model while another answers in time, so a slow model must hand the turn
+  // to the next one instead of failing the whole turn (the chat client already
+  // continues on timeout).
+  if (
+    !/quota|rate-limited|rate limit|temporarily unavailable|provider capacity|failed temporarily|resource\.exhausted|timed out|timeout/i.test(
+      err.message
+    )
+  ) {
     return null;
   }
   return new ThrottleError(err.message);

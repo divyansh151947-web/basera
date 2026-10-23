@@ -300,6 +300,61 @@ describe("same-vendor model fallback (per-model daily free-tier caps)", () => {
     expect(seen.some((m) => m.includes("secondary-tts"))).toBe(true);
   });
 
+  it("a model that exceeds the turn budget hands the turn to the next model", async () => {
+    setKey("test-key");
+    process.env.GEMINI_STT_MODEL = "slow-stt";
+    process.env.GEMINI_STT_FALLBACK_MODELS = "fast-stt";
+    const seen: string[] = [];
+    handler = (url) => {
+      seen.push(decodeURIComponent(url));
+      if (url.includes("slow-stt")) {
+        // What fetchWithTimeout surfaces when the per-request budget expires.
+        return Promise.reject(Object.assign(new Error("The operation was aborted."), { name: "AbortError" }));
+      }
+      return sttResponse("heard clearly");
+    };
+    const provider = new GeminiVoiceProvider();
+    const stt = await provider.prepareTurn({
+      transcriptText: "",
+      language: "en",
+      conversationId: "c",
+      leadId: "l",
+      audioBase64: Buffer.from([1, 2, 3, 4]).toString("base64"),
+      audioMimeType: "audio/wav",
+    });
+    expect(stt.mock).toBe(false);
+    expect(stt.transcriptText).toBe("heard clearly");
+    expect(stt.providerMetadata.audioProcessedBy).toBe("gemini (fast-stt)");
+    expect(seen.some((m) => m.includes("slow-stt"))).toBe(true);
+    expect(seen.some((m) => m.includes("fast-stt"))).toBe(true);
+  });
+
+  it("the default STT chain contains only models that still serve this key", async () => {
+    setKey("test-key");
+    delete process.env.GEMINI_STT_MODEL;
+    delete process.env.GEMINI_STT_FALLBACK_MODELS;
+    const seen: string[] = [];
+    handler = (url) => {
+      seen.push(decodeURIComponent(url));
+      if (url.includes("gemini-flash-lite-latest")) {
+        return jsonResponse({ error: { message: "Quota exceeded, limit: 20" } }, 429);
+      }
+      return sttResponse("ok");
+    };
+    const provider = new GeminiVoiceProvider();
+    const stt = await provider.prepareTurn({
+      transcriptText: "",
+      language: "en",
+      conversationId: "c",
+      leadId: "l",
+      audioBase64: Buffer.from([1, 2, 3, 4]).toString("base64"),
+      audioMimeType: "audio/wav",
+    });
+    expect(stt.transcriptText).toBe("ok");
+    expect(stt.providerMetadata.audioProcessedBy).toBe("gemini (gemini-3.5-flash-lite)");
+    expect(seen.join(",")).not.toMatch(/gemini-1\.5-flash|gemini-2\.5-flash/);
+  });
+
   it("an empty fallback list disables fallback entirely", async () => {
     setKey("test-key");
     process.env.GEMINI_TTS_MODEL = "only-tts";
