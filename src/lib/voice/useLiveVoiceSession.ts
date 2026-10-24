@@ -144,7 +144,9 @@ export function useLiveVoiceSession(options: UseLiveVoiceSessionOptions): UseLiv
       onReply?.(text);
     },
     onModelAudio: (base64: string) => {
-      wavPlayerRef.current?.play(base64);
+      // Rejections (empty/blocked clip) are logged by WavPlayer itself;
+      // swallow here so a live stream chunk never becomes an unhandled rejection.
+      wavPlayerRef.current?.play(base64).catch(() => undefined);
     },
     onToolCall: async (callId: string, transcript: string) => {
       try {
@@ -184,7 +186,7 @@ export function useLiveVoiceSession(options: UseLiveVoiceSessionOptions): UseLiv
           if (res.ok && data.greeting) {
             onReply?.(data.greeting);
             if (data.audioBase64) {
-              wavPlayerRef.current?.play(data.audioBase64);
+              wavPlayerRef.current?.play(data.audioBase64).catch(() => undefined);
             }
           }
         } catch {
@@ -267,9 +269,12 @@ export function useLiveVoiceSession(options: UseLiveVoiceSessionOptions): UseLiv
         onReply?.(result.reply);
         if (result.replyAudioBase64) {
           sessionRef.current?.setMuted(true);
-          wavPlayerRef.current?.play(result.replyAudioBase64).finally(() => {
-            sessionRef.current?.setMuted(false);
-          });
+          wavPlayerRef.current
+            ?.play(result.replyAudioBase64)
+            .catch(() => undefined)
+            .finally(() => {
+              sessionRef.current?.setMuted(false);
+            });
         }
       }
     } catch {
@@ -290,9 +295,12 @@ export function useLiveVoiceSession(options: UseLiveVoiceSessionOptions): UseLiv
         onReply?.(result.reply);
         if (result.replyAudioBase64) {
           sessionRef.current?.setMuted(true);
-          wavPlayerRef.current?.play(result.replyAudioBase64).finally(() => {
-            sessionRef.current?.setMuted(false);
-          });
+          wavPlayerRef.current
+            ?.play(result.replyAudioBase64)
+            .catch(() => undefined)
+            .finally(() => {
+              sessionRef.current?.setMuted(false);
+            });
         }
       }
     } catch {
@@ -313,9 +321,12 @@ export function useLiveVoiceSession(options: UseLiveVoiceSessionOptions): UseLiv
         onReply?.(data.greeting);
         if (data.audioBase64) {
           sessionRef.current?.setMuted(true);
-          wavPlayerRef.current?.play(data.audioBase64).finally(() => {
-            sessionRef.current?.setMuted(false);
-          });
+          wavPlayerRef.current
+            ?.play(data.audioBase64)
+            .catch(() => undefined)
+            .finally(() => {
+              sessionRef.current?.setMuted(false);
+            });
         }
       }
     } catch {

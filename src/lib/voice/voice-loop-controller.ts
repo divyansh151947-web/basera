@@ -26,6 +26,8 @@
  *   documented as best-effort in the final report.
  */
 
+import { voiceDiag } from "./voice-diagnostics";
+
 export type VoiceLoopState =
   | "idle"
   | "requesting-mic"
@@ -527,8 +529,15 @@ export class VoiceLoopController {
         this.afterSpeech();
       };
       try {
-        this.player = this.deps.playAudio(result.replyAudioBase64, mime, handleEnded, () => {
-          // Playback failure falls back to nothing audible; transcript stands.
+        this.player = this.deps.playAudio(result.replyAudioBase64, mime, handleEnded, (err) => {
+          // Blocked (autoplay) or failed playback: the host keeps the clip
+          // recoverable (Play reply button); the loop must not hang — resume
+          // listening exactly as if playback had ended.
+          voiceDiag("reply:playback-error", {
+            name: err?.name || "unknown",
+            bytes: result.replyAudioBase64?.length ?? 0,
+            mime,
+          });
           handleEnded();
         });
         return;
