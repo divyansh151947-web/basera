@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { ArrowLeft, Volume2, VolumeX, Maximize2, Minimize2, Search } from "lucide-react";
+import { ArrowLeft, Volume2, VolumeX, Maximize2, Minimize2, Search, Gauge } from "lucide-react";
 import type * as THREE from "three";
 import { TOUR_AMBIENT_AVAILABLE, TourAmbientSound } from "./tour-ambient";
 import {
@@ -16,7 +16,18 @@ import {
   type TourLocationId,
 } from "./tour-types";
 import { DOOR_DOLLY_MS, FLIGHT_MS, startFlight, stepFlight, type Flight } from "./tour-camera";
-import { easeInOutCubic, frameStride, resolveTourEnv, type TourEnv } from "./tour-env";
+import {
+  detectLowPowerDevice,
+  easeInOutCubic,
+  isQualityPref,
+  probeWebGL,
+  qualityPlan,
+  resolveQualityLevel,
+  resolveTourEnv,
+  type QualityLevel,
+  type QualityPref,
+  type TourEnv,
+} from "./tour-env";
 // TYPE-ONLY import from tour-scene. tour-scene is the only module in this
 // route that value-imports `three`, so a runtime import here would make the
 // whole three.js bundle a *synchronous* dependency of this component: webpack
@@ -29,9 +40,36 @@ import type { TourRefs } from "./tour-scene";
 import { PropertyIntelligence } from "./PropertyIntelligence";
 import { PropertyExplorer } from "./PropertyExplorer";
 
-type Phase = "loading" | "cine" | "door" | "opening" | "tour" | "failed";
+type Phase = "loading" | "cine" | "door" | "opening" | "tour" | "failed" | "error";
 type SceneApi = typeof import("./tour-scene");
 type HeadingTag = "h1" | "h2";
+/** Honest loading stages — text follows REAL progress, never a fake %. */
+type LoadStage = "engine" | "scene" | "lighting";
+
+const LOAD_STAGE_LABEL: Record<LoadStage, string> = {
+  engine: "Loading the 3D engine…",
+  scene: "Building the villa…",
+  lighting: "Lighting golden hour…",
+};
+
+const QUALITY_STORAGE_KEY = "basera:tour-quality";
+
+function readQualityPref(): QualityPref {
+  try {
+    const v = window.localStorage.getItem(QUALITY_STORAGE_KEY);
+    return isQualityPref(v) ? v : "auto";
+  } catch {
+    return "auto";
+  }
+}
+
+function writeQualityPref(pref: QualityPref): void {
+  try {
+    window.localStorage.setItem(QUALITY_STORAGE_KEY, pref);
+  } catch {
+    // Private mode — the choice still applies for this session.
+  }
+}
 
 /**
  * Start downloading three.js + the scene module the moment THIS chunk is
@@ -140,6 +178,14 @@ export function PropertyTour({ headingLevel = "h1" }: { headingLevel?: HeadingTa
   const cineBarRef = useRef<HTMLDivElement | null>(null);
   const [phase, setPhase] = useState<Phase>("loading");
   const [env, setEnv] = useState<TourEnv | null>(null);
+  // Honest loading progress (real boot stages — no fabricated percentage).
+  const [loadStage, setLoadStage] = useState<LoadStage>("engine");
+  // Adaptive quality: persisted user preference + currently resolved tier.
+  const [qualityPref, setQualityPref] = useState<QualityPref>("auto");
+  const [qualityLevel, setQualityLevel] = useState<QualityLevel | null>(null);
+  // Boot-failure detail (renderer/scene error — NOT "your device blocked
+  // WebGL"; that copy is reserved for genuinely WebGL-less browsers).
+  const [failDetail, setFailDetail] = useState<string | null>(null);
   const [location, setLocation] = useState<TourLocationId>("door");
   const [floorIndex, setFloorIndex] = useState(0);
   // Same-property cinematic still: captured from the live scene, shown only
@@ -186,6 +232,7 @@ const sceneApiRef = useRef<SceneApi | null>(null);
     dprStep: 0,
     skipCount: 0,
     renderedFrames: 0,
+    lastCensusAt: 0,
     posterTaken: false,
     posterUrl: null as string | null,
     doorBase: null as { pos: { x: number; y: number; z: number }; look: { x: number; y: number; z: number } } | null,
@@ -198,9 +245,18 @@ const sceneApiRef = useRef<SceneApi | null>(null);
     raf: 0,
     last: 0,
     disposed: false,
-    cachedWidth: 0,
-    cachedHeight: 0,
+    cachedWidth: -1,
+    cachedHeight: -1,
     hotspotFrame: 0,
+    loadStage: "engine" as LoadStage,
+    failDetail: null as string | null,
+    qualityPref: "auto" as QualityPref,
+    qualityLevel: null as QualityLevel | null,
+    preserveDrawingBuffer: true,
+    booted: false,
+    bootTimer: 0,
+    /** World generation — stale RAF loops from a previous world self-stop. */
+    gen: 0,
   });
 
   useEffect(() => {
@@ -236,58 +292,132 @@ const sceneApiRef = useRef<SceneApi | null>(null);
     }
 
     async function init() {
+      const gl = probeWebGL();
       const detected = resolveTourEnv(window.innerWidth, window.devicePixelRatio);
       if (cancelled) return;
       setEnv(detected);
-      if (!detected.webgl) {
+      if (!gl.ok) {
+        // WebGL genuinely cannot start on this device/configuration — the
+        // cinematic stills fallback is the honest, intended experience.
         st.phase = "failed";
+        st.failDetail = null;
         setPhase("failed");
         return;
       }
+      // Resolve the initial adaptive-quality tier (persisted preference +
+      // real capability signals, no user-agent sniffing).
+      st.qualityPref = readQualityPref();
+      setQualityPref(st.qualityPref);
+      const initialLevel = resolveQualityLevel(st.qualityPref, {
+        viewportWidth: window.innerWidth,
+        lowPower: detectLowPowerDevice(),
+        webgl: true,
+      });
+      st.qualityLevel = initialLevel;
+      setQualityLevel(initialLevel);
       try {
+        setLoadStage("engine");
+        st.loadStage = "engine";
         const [sceneApi, three] = await tourEnginePromise;
-    sceneApiRef.current = sceneApi;
+        sceneApiRef.current = sceneApi;
         if (cancelled) return;
-        await boot(three, sceneApi, detected);
-      } catch {
+        setLoadStage("scene");
+        st.loadStage = "scene";
+        await boot(three, sceneApi, detected, gl.attempt);
+      } catch (err) {
         if (!cancelled) {
-          st.phase = "failed";
-          setPhase("failed");
+          // A boot/import/renderer error is NOT "your device blocked WebGL".
+          // Show an honest error with a retry that re-initializes in place.
+          st.phase = "error";
+          st.failDetail = err instanceof Error ? err.message : String(err);
+          setFailDetail(st.failDetail);
+          setPhase("error");
         }
       }
     }
 
-    async function boot(THREE: typeof import("three"), sceneApi: SceneApi, detected: TourEnv) {
-      let renderer: THREE.WebGLRenderer;
-      try {
-        renderer = new THREE.WebGLRenderer({
-          antialias: !detected.simplified,
-          powerPreference: "high-performance",
-          preserveDrawingBuffer: true,
-        });
-      } catch {
-        st.phase = "failed";
-        setPhase("failed");
+    async function boot(THREE: typeof import("three"), sceneApi: SceneApi, detected: TourEnv, glAttempt: number) {
+      const mountElNow = mountRef.current;
+      if (!mountElNow) return;
+      // Renderer context ladder: prefer the configuration the probe verified,
+      // then progressively relax the requests that commonly fail on
+      // dual-GPU laptops / blocklisted GPUs / privacy modes (powerPreference,
+      // antialias) before ever giving up. Root-cause fix for the false
+      // "device blocked interactive 3D" fallback.
+      const baseAA = !detected.simplified;
+      const rendererAttempts: Array<THREE.WebGLRendererParameters> = [
+        { antialias: baseAA, powerPreference: "high-performance", preserveDrawingBuffer: true },
+        { antialias: baseAA, preserveDrawingBuffer: true },
+        { antialias: false, preserveDrawingBuffer: true },
+        { antialias: false },
+      ];
+      // Reorder so the probe-verified configuration leads the ladder.
+      if (glAttempt > 0 && glAttempt < rendererAttempts.length) {
+        const [lead] = rendererAttempts.splice(glAttempt, 1);
+        rendererAttempts.unshift(lead);
+      }
+      let renderer: THREE.WebGLRenderer | null = null;
+      for (const params of rendererAttempts) {
+        try {
+          renderer = new THREE.WebGLRenderer(params);
+          st.preserveDrawingBuffer = params.preserveDrawingBuffer !== false;
+          break;
+        } catch {
+          // Try the next, more tolerant configuration.
+        }
+      }
+      if (!renderer) {
+        st.phase = "error";
+        st.failDetail = "The browser refused every graphics context we can safely request.";
+        setFailDetail(st.failDetail);
+        setPhase("error");
         return;
       }
-      const W = mount!.clientWidth || window.innerWidth;
-      const H = mount!.clientHeight || window.innerHeight;
-      renderer.setPixelRatio(detected.pixelRatio);
+      const W = mountElNow.clientWidth || window.innerWidth;
+      const H = mountElNow.clientHeight || window.innerHeight;
       renderer.setSize(W, H);
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = 1.18;
+      renderer.toneMappingExposure = 1.28;
       renderer.outputColorSpace = THREE.SRGBColorSpace;
-      renderer.shadowMap.enabled = detected.shadows;
-      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-      mount!.appendChild(renderer.domElement);
+      // three r186 removed PCFSoftShadowMap (it silently fell back to
+      // PCFShadowMap with a console warning) — request PCF directly.
+      renderer.shadowMap.type = THREE.PCFShadowMap;
+      mountElNow.appendChild(renderer.domElement);
+      // Narrowed alias — every closure below renders through this handle.
+      const glRenderer: THREE.WebGLRenderer = renderer;
+      // Bump the world generation: any RAF loop still queued from a previous
+      // world (retry/unmount race) observes the mismatch and stops.
+      const gen = ++st.gen;
 
       const scene = new THREE.Scene();
       const camera = new THREE.PerspectiveCamera(55, W / H, 0.1, 500);
-      const refs = sceneApi.createTourWorld(scene, detected.simplified);
+      // Build detail follows the resolved quality tier (performance keeps the
+      // lean prop counts; the villa architecture itself is identical).
+      const buildSimplified = (st.qualityLevel ?? "high") === "performance";
+      const refs = sceneApi.createTourWorld(scene, buildSimplified);
+      setLoadStage("lighting");
+      st.loadStage = "lighting";
       // Soft image-based ambience for PBR glass/metal (best-effort, non-blocking).
       void sceneApi.enhanceWithEnvironment(scene, renderer).catch(() => undefined);
 
       Object.assign(st, { renderer, scene, camera, refs, threeLib: THREE, last: performance.now() });
+      st.booted = true;
+
+      // Apply the resolved quality plan (pixel ratio, shadows, accent lights,
+      // glass, atmosphere) to the fresh world — one code path shared with
+      // live tier switching.
+      let stride: 1 | 2 = 2;
+      const applyQualityLive = () => {
+        if (!st.renderer || !st.scene || !st.refs) return;
+        const lvl = st.qualityLevel ?? "high";
+        const plan = qualityPlan(lvl, window.innerWidth, window.devicePixelRatio);
+        stride = plan.stride;
+        sceneApi.applyLiveQuality(st.scene, st.renderer, st.refs, plan);
+        st.dprStep = 0;
+        st.cachedWidth = -1;
+        st.cachedHeight = -1;
+      };
+      applyQualityLive();
 
       if (detected.reducedMotion) {
         applyPreset(camera, CAMERA_PRESETS.door);
@@ -307,15 +437,16 @@ const sceneApiRef = useRef<SceneApi | null>(null);
       }
 
       const onResize = () => {
-        if (!mount) return;
-        const w = mount.clientWidth || window.innerWidth;
-        const h = mount.clientHeight || window.innerHeight;
+        const el = mountRef.current;
+        if (!el) return;
+        const w = el.clientWidth || window.innerWidth;
+        const h = el.clientHeight || window.innerHeight;
         camera.aspect = w / h;
         camera.updateProjectionMatrix();
-        renderer.setSize(w, h);
+        glRenderer.setSize(w, h);
         // Invalidate cached dimensions so hotspots recalculate on next update
-        st.cachedWidth = 0;
-        st.cachedHeight = 0;
+        st.cachedWidth = -1;
+        st.cachedHeight = -1;
       };
       window.addEventListener("resize", onResize);
 
@@ -327,7 +458,7 @@ const sceneApiRef = useRef<SceneApi | null>(null);
         inViewRef.current = visible;
         ambientRef.current?.setSceneVisible(sectionVisible && document.visibilityState === "visible");
       });
-      observer.observe(mount);
+      observer.observe(mountElNow);
       const onVisibility = () => {
         visible = document.visibilityState === "visible";
         inViewRef.current = sectionVisible && document.visibilityState === "visible";
@@ -340,7 +471,7 @@ const sceneApiRef = useRef<SceneApi | null>(null);
       const ptr = new THREE.Vector2();
       const onTap = (e: PointerEvent) => {
         if (st.phase !== "door" || !st.camera || !st.refs) return;
-        const rect = renderer.domElement.getBoundingClientRect();
+        const rect = glRenderer.domElement.getBoundingClientRect();
         ptr.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
         ptr.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
         ray.setFromCamera(ptr, st.camera);
@@ -351,33 +482,43 @@ const sceneApiRef = useRef<SceneApi | null>(null);
         const hits = ray.intersectObjects(targets, false);
         if (hits.length > 0) openDoor(detected);
       };
-      renderer.domElement.addEventListener("pointerdown", onTap);
+      glRenderer.domElement.addEventListener("pointerdown", onTap);
 
       // GPU context loss: freeze on the same-property cinematic still
       // captured from this exact scene (never a text fallback, never stock).
+      // If the browser restores the context later, re-initialize in place —
+      // no reload, no duplicate renderers.
       const onContextLost = (e: Event) => {
         e.preventDefault();
         if (st.posterUrl && !cancelled) {
           setStillUrl(st.posterUrl);
         } else if (!cancelled) {
-          st.phase = "failed";
-          setPhase("failed");
+          st.phase = "error";
+          st.failDetail = "The graphics context was lost.";
+          setFailDetail(st.failDetail);
+          setPhase("error");
         }
       };
-      renderer.domElement.addEventListener("webglcontextlost", onContextLost);
+      const onContextRestored = () => {
+        if (!cancelled) retry3D();
+      };
+      glRenderer.domElement.addEventListener("webglcontextlost", onContextLost);
+      glRenderer.domElement.addEventListener("webglcontextrestored", onContextRestored);
 
-      // Adaptive render stride for this tier (HIGH = every frame).
-      const stride = frameStride(detected.simplified);
-
+      // Live perf census for the quality governor + diagnostics. The scene
+      // cost snapshot is taken once (stats), the runtime metrics refresh
+      // about once a second while rendering.
+      let perfCensus: object | null = null;
       const loop = (now: number) => {
-        if (st.disposed) return;
+        if (st.disposed || st.gen !== gen) return;
         st.raf = requestAnimationFrame(loop);
         if (!visible || document.visibilityState !== "visible") {
           st.last = now;
           return;
         }
-        // LOW tier pacing: render every Nth frame with accumulated time, so
-        // flights/pool/cars/orbit move at IDENTICAL speed for ~1/N the GPU.
+        // Performance-tier pacing: render every Nth frame with accumulated
+        // time, so flights/pool/cars/orbit move at IDENTICAL speed for ~1/N
+        // the GPU. `stride` follows the live quality tier.
         if (stride > 1) {
           st.skipCount = (st.skipCount + 1) % stride;
           // st.last deliberately untouched on skipped frames → the next
@@ -387,27 +528,37 @@ const sceneApiRef = useRef<SceneApi | null>(null);
         const delta = Math.min(100, now - st.last);
         st.last = now;
         tick(delta, now);
-        renderer.render(scene, camera);
+        glRenderer.render(scene, camera);
         st.renderedFrames += 1;
         // Capture one full-res cinematic still of THIS property for the
         // context-loss fallback (preserveDrawingBuffer makes this exact).
-        if (!st.posterTaken && st.renderedFrames > 10 && (st.phase === "door" || st.phase === "tour")) {
+        if (!st.posterTaken && st.preserveDrawingBuffer && st.renderedFrames > 10 && (st.phase === "door" || st.phase === "tour")) {
           st.posterTaken = true;
           try {
-            st.posterUrl = renderer.domElement.toDataURL("image/jpeg", 0.85);
+            st.posterUrl = glRenderer.domElement.toDataURL("image/jpeg", 0.85);
           } catch {
             st.posterUrl = null;
           }
         }
-        // One-time perf census for profiling (draw calls, tris, textures).
+        // One-time perf census for profiling (draw calls, tris, textures),
+        // refreshed ~1×/s so fps/quality stay current in diagnostics.
         if (st.renderedFrames === 30 && typeof window !== "undefined") {
           try {
-            const stats = sceneApi.collectPerfStats(scene, renderer);
+            perfCensus = sceneApi.collectPerfStats(scene, glRenderer);
+          } catch {
+            perfCensus = null;
+          }
+        }
+        if (perfCensus && now - st.lastCensusAt > 1000) {
+          st.lastCensusAt = now;
+          try {
             (window as unknown as { __baseraPerf?: object }).__baseraPerf = {
-              ...stats,
+              ...perfCensus,
               fpsEMA: Math.round(st.fpsEMA),
-              pixelRatio: renderer.getPixelRatio(),
-              simplified: detected.simplified,
+              pixelRatio: glRenderer.getPixelRatio(),
+              quality: st.qualityLevel ?? "high",
+              qualityPref: st.qualityPref,
+              simplified: (st.qualityLevel ?? "high") === "performance",
             };
           } catch {
             // Profiling must never break the tour.
@@ -483,10 +634,13 @@ const sceneApiRef = useRef<SceneApi | null>(null);
 
       function ambient(deltaMs: number, nowMs: number) {
         const dt = deltaMs / 1000;
-        if (!detected.simplified && refs.poolWater) {
+        // Ambient motion follows the live quality tier (Performance keeps
+        // the pool still and the sky/traffic frozen — pure GPU/CPU savings).
+        const lively = (st.qualityLevel ?? "high") !== "performance";
+        if (lively && refs.poolWater) {
           refs.poolWater.position.y = 0.36 + Math.sin((nowMs / 1000) * 1.4) * 0.012;
         }
-        if (!detected.simplified && !detected.reducedMotion) {
+        if (lively && !detected.reducedMotion) {
           for (const c of refs.clouds) {
             c.position.x += dt * 0.35;
             if (c.position.x > 80) c.position.x = -80;
@@ -514,18 +668,18 @@ const sceneApiRef = useRef<SceneApi | null>(null);
         }
       }
 
-      // Adaptive DPR: if the device can't hold ~40fps at full resolution,
-      // step pixel ratio down (never up) to protect smoothness. Desktop only;
-      // mobile already runs a capped simplified tier.
+      // Adaptive DPR: if the device can't hold ~40fps at its quality cap,
+      // step pixel ratio down (never up) to protect smoothness. The cap
+      // itself comes from the live quality tier.
       function governPixelRatio(deltaMs: number) {
-        if (detected.simplified || st.disposed) return;
+        if (st.disposed) return;
         const fps = 1000 / Math.max(1, deltaMs);
         st.fpsEMA += (fps - st.fpsEMA) * 0.04;
         st.frames += 1;
         if (st.frames % 240 === 0 && st.fpsEMA < 40 && st.dprStep < 3 && st.renderer) {
           st.dprStep += 1;
-          const base = Math.min(window.devicePixelRatio || 1, 2);
-          st.renderer.setPixelRatio(Math.max(1, base - st.dprStep * 0.25));
+          const cap = qualityPlan(st.qualityLevel ?? "high", window.innerWidth, window.devicePixelRatio).maxPixelRatio;
+          st.renderer.setPixelRatio(Math.max(1, cap - st.dprStep * 0.25));
         }
       }
 
@@ -537,6 +691,9 @@ const sceneApiRef = useRef<SceneApi | null>(null);
         if (id === "entrance") void ambientRef.current?.unlock();
       }
 
+      // Live quality hook — the outer retry/quality controller reaches the
+      // running world through these without recreating anything.
+      (st as unknown as { applyQuality?: () => void }).applyQuality = applyQualityLive;
       (st as unknown as { api: object }).api = {
         openDoor: () => openDoor(detected),
         flyTo: (id: TourLocationId) => flyTo(id, detected),
@@ -547,11 +704,101 @@ const sceneApiRef = useRef<SceneApi | null>(null);
       st.cleanup = () => {
         window.removeEventListener("resize", onResize);
         document.removeEventListener("visibilitychange", onVisibility);
-        renderer.domElement.removeEventListener("pointerdown", onTap);
-        renderer.domElement.removeEventListener("webglcontextlost", onContextLost);
+        glRenderer.domElement.removeEventListener("pointerdown", onTap);
+        glRenderer.domElement.removeEventListener("webglcontextlost", onContextLost);
+        glRenderer.domElement.removeEventListener("webglcontextrestored", onContextRestored);
         observer.disconnect();
       };
     }
+
+    /**
+     * In-place retry: tear down whatever world exists (renderer, scene,
+     * listeners, RAF) and boot a fresh one. Never a second renderer, never a
+     * page reload — the Retry buttons and context-restore path both use this.
+     */
+    function retry3D() {
+      if (cancelled) return;
+      st.disposed = true;
+      st.gen += 1; // any still-queued RAF frame self-stops
+      cancelAnimationFrame(st.raf);
+      st.raf = 0;
+      st.cleanup?.();
+      st.cleanup = null;
+      if (st.scene && st.renderer) {
+        try {
+          sceneApiRef.current?.disposeTourWorld(st.scene, st.renderer);
+        } catch {
+          // Best-effort GPU teardown.
+        }
+        st.scene = null;
+      }
+      if (st.renderer) {
+        try {
+          st.renderer.dispose();
+        } catch {
+          // Best-effort.
+        }
+        try {
+          st.renderer.domElement.parentElement?.removeChild(st.renderer.domElement);
+        } catch {
+          // Already removed.
+        }
+        st.renderer = null;
+      }
+      // Reset the session state machine for a fresh boot.
+      st.disposed = false;
+      st.booted = false;
+      st.phase = "loading";
+      st.flight = null;
+      st.doorT = -1;
+      st.cineT = -1;
+      st.cineLeg = 0;
+      st.cineElapsed = 0;
+      st.frames = 0;
+      st.renderedFrames = 0;
+      st.skipCount = 0;
+      st.dprStep = 0;
+      st.posterTaken = false;
+      st.posterUrl = null;
+      st.doorBase = null;
+      st.refs = null;
+      st.camera = null;
+      st.scene = null;
+      st.threeLib = null;
+      st.cachedWidth = -1;
+      st.cachedHeight = -1;
+      setStillUrl(null);
+      setFailDetail(null);
+      st.failDetail = null;
+      setLoadStage("engine");
+      st.loadStage = "engine";
+      setPhase("loading");
+      // The mount div only re-enters the DOM once phase returns to a world
+      // phase — wait one frame so React commits it before boot reads it.
+      requestAnimationFrame(() => {
+        if (!cancelled) void init();
+      });
+    }
+
+    function setQualityPrefLive(pref: QualityPref) {
+      st.qualityPref = pref;
+      writeQualityPref(pref);
+      const level = resolveQualityLevel(pref, {
+        viewportWidth: window.innerWidth,
+        lowPower: detectLowPowerDevice(),
+        webgl: true,
+      });
+      st.qualityLevel = level;
+      setQualityPref(pref);
+      setQualityLevel(level);
+      // Apply to the live world if one exists; boot applies it otherwise.
+      (st as unknown as { applyQuality?: () => void }).applyQuality?.();
+    }
+
+    // Expose retry + quality control to the UI layer (works even when boot
+    // failed before the world API existed).
+    (st as unknown as { retry?: () => void }).retry = retry3D;
+    (st as unknown as { setQualityPref?: (p: QualityPref) => void }).setQualityPref = setQualityPrefLive;
 
     function applyPreset(camera: THREE.PerspectiveCamera, preset: { pos: { x: number; y: number; z: number }; look: { x: number; y: number; z: number } }) {
       camera.position.set(preset.pos.x, preset.pos.y, preset.pos.z);
@@ -592,7 +839,7 @@ const sceneApiRef = useRef<SceneApi | null>(null);
     }
 
     function flyTo(id: TourLocationId, detected: TourEnv) {
-      if (!st.camera || st.phase === "loading" || st.phase === "failed" || st.phase === "cine") return;
+      if (!st.camera || st.phase === "loading" || st.phase === "failed" || st.phase === "error" || st.phase === "cine") return;
       if (st.phase === "door" || st.phase === "opening") {
         st.doorT = -1;
         st.refs!.doorLeft.rotation.y = 1.85;
@@ -618,11 +865,19 @@ const sceneApiRef = useRef<SceneApi | null>(null);
 
     function updateHotspots(camera: THREE.PerspectiveCamera) {
       const layer = hotspotLayerRef.current;
-      if (!layer || !st.refs || !mount || !st.threeLib) return;
-      
-      // Cache viewport dimensions - only read when they actually change
-      const w = st.cachedWidth ?? (st.cachedWidth = mount.clientWidth || window.innerWidth);
-      const h = st.cachedHeight ?? (st.cachedHeight = mount.clientHeight || window.innerHeight);
+      const host = mountRef.current;
+      if (!layer || !st.refs || !host || !st.threeLib) return;
+
+      // Cache viewport dimensions — re-read ONLY when invalidated (resize /
+      // quality change set these to -1). The previous `0 ?? x` pattern never
+      // re-read because the cache initializes to 0, which is not nullish —
+      // every hotspot projected with w=h=0 and stacked at the corner.
+      if (st.cachedWidth < 0) {
+        st.cachedWidth = host.clientWidth || window.innerWidth;
+        st.cachedHeight = host.clientHeight || window.innerHeight;
+      }
+      const w = st.cachedWidth;
+      const h = st.cachedHeight;
       
       // Throttle hotspot updates - only run every 3 frames (~20fps) since camera moves smoothly
       st.hotspotFrame = (st.hotspotFrame ?? 0) + 1;
@@ -669,29 +924,57 @@ const sceneApiRef = useRef<SceneApi | null>(null);
       }
     }
 
-    // Perf: this canvas sits below the fold. Defer the three.js fetch +
-    // scene build until the section is near the viewport (same visuals once
-    // reached — the loading state is unchanged, it just starts later, off
-    // the critical path). Falls back to immediate boot without IO support.
+    // Perf: on the homepage this canvas sits below the fold, so defer the
+    // scene build until the section is near the viewport. TWO safety nets
+    // guarantee boot always happens (root-cause fix for the infinite
+    // "Lighting the villa…" hang):
+    //  - IntersectionObserver callbacks are deferred indefinitely for hidden
+    //    or occluded windows, so a fixed timeout also boots the experience;
+    //  - a visibilitychange handler re-arms a short timer when the tab
+    //    becomes visible.
+    // On /tour the experience IS the page — boot immediately, no gate.
     let gate: IntersectionObserver | null = null;
-    if (typeof IntersectionObserver === "function") {
+    let bootedOnce = false;
+    let visibleBootTimer = 0;
+    const requestBoot = () => {
+      if (bootedOnce || cancelled) return;
+      bootedOnce = true;
+      window.clearTimeout(st.bootTimer);
+      void init();
+    };
+    const armVisibleBoot = () => {
+      if (bootedOnce || cancelled || document.visibilityState !== "visible") return;
+      window.clearTimeout(visibleBootTimer);
+      visibleBootTimer = window.setTimeout(requestBoot, 1500);
+    };
+    const onGateVisibility = () => {
+      if (document.visibilityState === "visible") armVisibleBoot();
+    };
+    if (window.location.pathname === "/tour" || typeof IntersectionObserver !== "function") {
+      requestBoot();
+    } else {
       gate = new IntersectionObserver(
         (entries) => {
           if (entries[0]?.isIntersecting) {
             gate?.disconnect();
             gate = null;
-            if (!cancelled) void init();
+            requestBoot();
           }
         },
         { rootMargin: "1200px 0px" }
       );
       gate.observe(mount);
-    } else {
-      void init();
+      st.bootTimer = window.setTimeout(requestBoot, 4000);
+      document.addEventListener("visibilitychange", onGateVisibility);
+      armVisibleBoot();
     }
     return () => {
       cancelled = true;
       st.disposed = true;
+      st.gen += 1; // stale RAF loops self-stop on the generation mismatch
+      window.clearTimeout(st.bootTimer);
+      window.clearTimeout(visibleBootTimer);
+      document.removeEventListener("visibilitychange", onGateVisibility);
       gate?.disconnect();
       ambientRef.current?.dispose();
       ambientRef.current = null;
@@ -706,9 +989,10 @@ const sceneApiRef = useRef<SceneApi | null>(null);
         st.scene = null;
       }
       st.renderer?.dispose();
-      if (mount && st.renderer) {
+      const el = st.renderer?.domElement;
+      if (el && el.parentElement) {
         try {
-          mount.removeChild(st.renderer.domElement);
+          el.parentElement.removeChild(el);
         } catch {
           // Already removed.
         }
@@ -736,6 +1020,18 @@ const sceneApiRef = useRef<SceneApi | null>(null);
 
   function api() {
     return (stateRef.current as unknown as { api?: { openDoor: () => void; flyTo: (id: TourLocationId) => void; skipCine: () => void } }).api;
+  }
+
+  /** In-place 3D retry — re-initializes the world, never reloads the page. */
+  function retry3D() {
+    (stateRef.current as unknown as { retry?: () => void }).retry?.();
+  }
+
+  /** Adaptive quality: cycle Auto → High → Balanced → Performance. */
+  function cycleQuality() {
+    const order: QualityPref[] = ["auto", "high", "balanced", "performance"];
+    const next = order[(order.indexOf(qualityPref) + 1) % order.length];
+    (stateRef.current as unknown as { setQualityPref?: (p: QualityPref) => void }).setQualityPref?.(next);
   }
 
   // Ambient music toggle (click = user gesture, so enabling may unlock audio).
@@ -788,7 +1084,7 @@ const sceneApiRef = useRef<SceneApi | null>(null);
   const Heading = headingLevel;
 
   if (phase === "failed") {
-    return <TourCinematicFallback headingLevel={headingLevel} />;
+    return <TourCinematicFallback headingLevel={headingLevel} onRetry={retry3D} />;
   }
 
   const infoKey = INFO_KEYS.has(location) ? (location as keyof typeof ROOM_INFO) : null;
@@ -818,6 +1114,7 @@ const sceneApiRef = useRef<SceneApi | null>(null);
           <button
             key={hs.id}
             type="button"
+            data-hotspot-name={hs.id}
             onClick={() => api()?.flyTo(hs.target)}
             className="pointer-events-auto absolute flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full border border-white/25 bg-black/45 py-1.5 pl-2 pr-3 text-xs font-medium tracking-wide text-white backdrop-blur-sm transition-all duration-300 hover:border-white/60 hover:bg-black/60"
             style={{ display: "none", opacity: 0 }}
@@ -897,6 +1194,24 @@ const sceneApiRef = useRef<SceneApi | null>(null);
         </button>
       )}
 
+      {/* Adaptive quality control — cycles Auto → High → Balanced →
+          Performance. Applies live to the running world (pixel ratio,
+          shadows, accent lights, glass, atmosphere); never rebuilds the
+          scene and never loses camera state. Auto is capability-based. */}
+      {inTour && !stillUrl && (
+        <button
+          type="button"
+          onClick={cycleQuality}
+          aria-label={`Graphics quality: ${qualityPref}${qualityLevel ? ` (currently ${qualityLevel})` : ""}. Click to change.`}
+          title={`Graphics quality: ${qualityPref}${qualityLevel ? ` — running ${qualityLevel}` : ""}`}
+          className="absolute right-4 z-20 flex items-center gap-1.5 rounded-full border border-white/20 bg-black/45 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/80 backdrop-blur-sm transition hover:border-white/50 hover:text-white"
+          style={{ top: soundReady ? "160px" : "108px" }}
+        >
+          <Gauge size={13} />
+          {qualityPref}
+        </button>
+      )}
+
       {/* Cinematic intro overlay — same scene, film language. On phones the
           block is lifted above the floating chat/voice band (which occupies
           the bottom ~84px) so the progress bar and Skip/Enter actions are not
@@ -961,7 +1276,7 @@ const sceneApiRef = useRef<SceneApi | null>(null);
           <div className="absolute inset-x-0 bottom-16 flex flex-col items-center gap-3 px-4 text-center">
             <p className="text-[11px] font-semibold uppercase tracking-[0.3em] text-[#ffdf9e]">Live 3D paused — cinematic still</p>
             <p className="max-w-md text-sm text-white/75">Your device paused graphics. This is the same villa, same frame.</p>
-            <button type="button" onClick={() => window.location.reload()} className="rounded-full bg-white px-8 py-2.5 text-xs font-semibold uppercase tracking-[0.2em] text-black transition hover:bg-white/85">
+            <button type="button" onClick={retry3D} className="rounded-full bg-white px-8 py-2.5 text-xs font-semibold uppercase tracking-[0.2em] text-black transition hover:bg-white/85">
               Resume 3D tour
             </button>
           </div>
@@ -971,11 +1286,36 @@ const sceneApiRef = useRef<SceneApi | null>(null);
       {phase === "loading" && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-4" style={LOADING_BG_STYLE}>
           <p className="font-display text-3xl tracking-[0.35em] text-white">BASERA</p>
-          <p className="text-[11px] uppercase tracking-[0.25em] text-white/60">Lighting the villa…</p>
+          <p className="text-[11px] uppercase tracking-[0.25em] text-white/60">{LOAD_STAGE_LABEL[loadStage]}</p>
           <div className="h-px w-40 overflow-hidden bg-white/15">
             <div className="h-full w-1/3 animate-pulse bg-[#ffdf9e]" />
           </div>
           <p className="text-[11px] text-white/50">Golden-hour architectural environment</p>
+        </div>
+      )}
+
+      {/* Honest boot-error state — a real error (import/renderer/scene),
+          NOT "your device blocked WebGL". Retry re-initializes in place. */}
+      {phase === "error" && (
+        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-4 px-6 text-center" style={LOADING_BG_STYLE}>
+          <p className="font-display text-3xl tracking-[0.35em] text-white">BASERA</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.3em] text-[#ffdf9e]">The 3D tour hit a snag</p>
+          <p className="max-w-md text-sm leading-6 text-white/75">
+            The interactive scene could not start this time. This is usually temporary — retrying re-initializes the
+            villa right here, without reloading the page.
+          </p>
+          {failDetail && (
+            <p className="max-w-md rounded-xl border border-white/10 bg-black/40 px-3 py-2 font-mono text-[11px] leading-4 text-white/50">
+              {failDetail}
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={retry3D}
+            className="rounded-full bg-white px-8 py-2.5 text-xs font-semibold uppercase tracking-[0.2em] text-black transition hover:bg-white/85"
+          >
+            Retry 3D tour
+          </button>
         </div>
       )}
 
@@ -1109,11 +1449,12 @@ const sceneApiRef = useRef<SceneApi | null>(null);
 }
 
 /**
- * Cinematic fallback when WebGL is genuinely unavailable.
- * Same villa story, same warm grade, poster visual + room gallery —
- * never a dark text-only list as the primary experience.
+ * Cinematic fallback when WebGL is genuinely unavailable (the capability
+ * probe itself failed every safe configuration). Same villa story, same warm
+ * grade, poster visual + room gallery — never a dark text-only list as the
+ * primary experience. Retry re-probes and re-initializes in place.
  */
-function TourCinematicFallback({ headingLevel = "h1" }: { headingLevel?: HeadingTag }) {
+function TourCinematicFallback({ headingLevel = "h1", onRetry }: { headingLevel?: HeadingTag; onRetry: () => void }) {
   const poster = "https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?auto=format&fit=crop&w=1800&q=80";
   const rooms = [
     { label: "Living Room", img: "https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=800&q=70" },
@@ -1147,7 +1488,7 @@ function TourCinematicFallback({ headingLevel = "h1" }: { headingLevel?: Heading
           ))}
         </div>
         <div className="flex flex-wrap justify-center gap-3">
-          <button type="button" onClick={() => window.location.reload()} className="rounded-full bg-white px-6 py-2.5 text-sm font-semibold text-black transition hover:bg-white/85">
+          <button type="button" onClick={onRetry} className="rounded-full bg-white px-6 py-2.5 text-sm font-semibold text-black transition hover:bg-white/85">
             Retry 3D tour
           </button>
           <Link href="/signup" className="rounded-full border border-white/30 bg-black/45 px-6 py-2.5 text-sm font-medium text-white backdrop-blur-sm transition hover:border-white/60">

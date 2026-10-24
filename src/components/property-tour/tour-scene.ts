@@ -34,6 +34,14 @@ export interface TourRefs {
   movingCars: THREE.Group[];
   sunLight: THREE.DirectionalLight;
   porchZone: THREE.Mesh;
+  /** Warm secondary/key directionals — toggled by the quality system. */
+  keyLight: THREE.DirectionalLight;
+  /** Rim/fill/pool/pole accents — hidden on Performance (GPU cost). */
+  secondaryLights: THREE.Light[];
+  /** Every physical glass material — transmission toggled by quality tier. */
+  glassMats: THREE.MeshPhysicalMaterial[];
+  /** All shadow-casting lights — shadow-map resize per quality tier. */
+  shadowCasters: Array<THREE.DirectionalLight | THREE.SpotLight>;
 }
 
 export interface TourWorld {
@@ -110,8 +118,15 @@ function mat(color: number, roughness = 0.85, metalness = 0): THREE.MeshStandard
   return m;
 }
 
+/**
+ * Every glass material handed out is recorded so the adaptive quality system
+ * can toggle `transmission` live (transmission forces an extra full-scene
+ * render pass — the single most expensive knob in this world) without ever
+ * rebuilding the scene or losing camera state.
+ */
+const glassRegistry: THREE.MeshPhysicalMaterial[] = [];
 function glassMat(opacity = 0.3, warm = false): THREE.MeshPhysicalMaterial {
-  return new THREE.MeshPhysicalMaterial({
+  const m = new THREE.MeshPhysicalMaterial({
     color: warm ? GLASS_TINT_WARM : GLASS_TINT,
     roughness: 0.03,
     metalness: 0.1,
@@ -125,10 +140,14 @@ function glassMat(opacity = 0.3, warm = false): THREE.MeshPhysicalMaterial {
     ior: 1.52,
     side: THREE.DoubleSide,
   });
+  glassRegistry.push(m);
+  m.userData.baseraOpacity = opacity;
+  m.userData.baseraTransmission = 0.85;
+  return m;
 }
 
 function glassMatInterior(opacity = 0.4): THREE.MeshPhysicalMaterial {
-  return new THREE.MeshPhysicalMaterial({
+  const m = new THREE.MeshPhysicalMaterial({
     color: GLASS_TINT_WARM,
     roughness: 0.05,
     metalness: 0.05,
@@ -142,6 +161,10 @@ function glassMatInterior(opacity = 0.4): THREE.MeshPhysicalMaterial {
     ior: 1.5,
     side: THREE.DoubleSide,
   });
+  glassRegistry.push(m);
+  m.userData.baseraOpacity = opacity;
+  m.userData.baseraTransmission = 0.7;
+  return m;
 }
 
 function box(w: number, h: number, d: number, material: THREE.Material, x = 0, y = 0, z = 0): THREE.Mesh {
@@ -230,9 +253,29 @@ function heroSize(): number {
   return HI_RES ? 512 : 256;
 }
 
+/**
+ * Shared texture cache: the stone/wood/concrete/marble/grass/rug builders are
+ * seeded and deterministic, so every call returns a PIXEL-IDENTICAL canvas.
+ * Previously each call site re-drew a fresh 512² canvas and re-uploaded it to
+ * the GPU (the villa alone calls woodTexture() 8+ times) — pure duplicate
+ * VRAM and boot cost. One GPU texture per (name, size, args) instead.
+ * Disposal stays safe: disposeTourWorld may free a shared texture, and
+ * three.js re-uploads from the retained canvas source on next use (same
+ * contract the geometry cache above relies on).
+ */
+const texCache = new Map<string, THREE.CanvasTexture>();
+function cachedTex(key: string, make: () => THREE.CanvasTexture): THREE.CanvasTexture {
+  const hit = texCache.get(key);
+  if (hit) return hit;
+  const t = make();
+  texCache.set(key, t);
+  return t;
+}
+
 /** Dark stone cladding with subtle course variation — premium. */
 function stoneTexture(): THREE.CanvasTexture {
-  return canvasTex(heroSize(), (ctx, s) => {
+  const size = heroSize();
+  return cachedTex(`stone|${size}`, () => canvasTex(size, (ctx, s) => {
     ctx.fillStyle = "#2d2a26";
     ctx.fillRect(0, 0, s, s);
     const rand = seededRand(33);
@@ -261,12 +304,13 @@ function stoneTexture(): THREE.CanvasTexture {
       ctx.fillStyle = rand() < 0.5 ? "rgba(0,0,0,0.08)" : "rgba(255,255,255,0.03)";
       ctx.fillRect(Math.floor(rand() * s), Math.floor(rand() * s), 1, 1);
     }
-  }, 3, 1.5);
+  }, 3, 1.5));
 }
 
 /** Rich dark wood grain for premium teak. */
 function woodTexture(): THREE.CanvasTexture {
-  return canvasTex(heroSize(), (ctx, s) => {
+  const size = heroSize();
+  return cachedTex(`wood|${size}`, () => canvasTex(size, (ctx, s) => {
     ctx.fillStyle = "#3d2818";
     ctx.fillRect(0, 0, s, s);
     const rand = seededRand(11);
@@ -307,12 +351,13 @@ function woodTexture(): THREE.CanvasTexture {
       ctx.arc(kx, ky, kr, 0, Math.PI * 2);
       ctx.fill();
     }
-  }, 3, 3);
+  }, 3, 3));
 }
 
 /** Premium dark travertine/concrete with realistic mottling. */
 function concreteTexture(base = "#3a3632"): THREE.CanvasTexture {
-  return canvasTex(heroSize(), (ctx, s) => {
+  const size = heroSize();
+  return cachedTex(`concrete|${size}|${base}`, () => canvasTex(size, (ctx, s) => {
     ctx.fillStyle = base;
     ctx.fillRect(0, 0, s, s);
     const rand = seededRand(21);
@@ -334,31 +379,33 @@ function concreteTexture(base = "#3a3632"): THREE.CanvasTexture {
       ctx.fillStyle = rand() < 0.5 ? "rgba(5,5,5,0.1)" : "rgba(200,190,175,0.05)";
       ctx.fillRect(Math.floor(rand() * s), Math.floor(rand() * s), 1, 1);
     }
-  }, 3, 3);
+  }, 3, 3));
 }
 
-/** Night lawn — rich dark green with subtle mow stripes. */
+/** Dusk lawn — sun-touched green with subtle mow stripes (golden hour). */
 function grassTexture(): THREE.CanvasTexture {
-  return canvasTex(heroSize(), (ctx, s) => {
-    ctx.fillStyle = "#0f1f14";
+  const size = heroSize();
+  return cachedTex(`grass|${size}`, () => canvasTex(size, (ctx, s) => {
+    ctx.fillStyle = "#22391f";
     ctx.fillRect(0, 0, s, s);
     // Mow stripes
     for (let i = 0; i < 12; i += 1) {
-      ctx.fillStyle = i % 2 ? "rgba(255,255,255,0.015)" : "rgba(0,0,0,0.08)";
+      ctx.fillStyle = i % 2 ? "rgba(255,236,190,0.05)" : "rgba(10,20,8,0.10)";
       ctx.fillRect(0, (i * s) / 12, s, s / 12);
     }
     const rand = seededRand(55);
     // Grass blades suggestion
     for (let i = 0; i < 4000; i += 1) {
-      ctx.fillStyle = rand() < 0.5 ? "rgba(6,25,12,0.4)" : "rgba(45,75,45,0.1)";
+      ctx.fillStyle = rand() < 0.5 ? "rgba(14,36,16,0.4)" : "rgba(96,128,72,0.12)";
       ctx.fillRect(Math.floor(rand() * s), Math.floor(rand() * s), 1, 2);
     }
-  }, 12, 12);
+  }, 12, 12));
 }
 
 /** Warm light marble for kitchen/bath — glows under interior light. */
 function marbleTexture(): THREE.CanvasTexture {
-  return canvasTex(heroSize(), (ctx, s) => {
+  const size = heroSize();
+  return cachedTex(`marble|${size}`, () => canvasTex(size, (ctx, s) => {
     ctx.fillStyle = "#c4bcac";
     ctx.fillRect(0, 0, s, s);
     const rand = seededRand(77);
@@ -394,11 +441,11 @@ function marbleTexture(): THREE.CanvasTexture {
       }
       ctx.stroke();
     }
-  }, 1.5, 1.5);
+  }, 1.5, 1.5));
 }
 
 function rugTexture(c1 = "#4a3428", c2 = "#8a7050"): THREE.CanvasTexture {
-  return canvasTex(256, (ctx) => {
+  return cachedTex(`rug|${c1}|${c2}`, () => canvasTex(256, (ctx) => {
     ctx.fillStyle = c1;
     ctx.fillRect(0, 0, 256, 256);
     ctx.strokeStyle = c2;
@@ -414,7 +461,7 @@ function rugTexture(c1 = "#4a3428", c2 = "#8a7050"): THREE.CanvasTexture {
       ctx.fillRect(-5, -5, 10, 10);
       ctx.restore();
     }
-  }, 1, 1);
+  }, 1, 1));
 }
 
 function puffTexture(): THREE.CanvasTexture {
@@ -423,8 +470,8 @@ function puffTexture(): THREE.CanvasTexture {
   canvas.height = 64;
   const ctx = canvas.getContext("2d")!;
   const grad = ctx.createRadialGradient(64, 32, 4, 64, 32, 60);
-  grad.addColorStop(0, "rgba(70,90,130,0.4)");
-  grad.addColorStop(1, "rgba(70,90,130,0)");
+  grad.addColorStop(0, "rgba(216,182,146,0.42)");
+  grad.addColorStop(1, "rgba(216,182,146,0)");
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, 128, 64);
   const tex = new THREE.CanvasTexture(canvas);
@@ -519,32 +566,35 @@ function buildContactShadows(scene: THREE.Scene): void {
 // ---------------------------------------------------------------- sky ---
 
 function buildSky(scene: THREE.Scene, refs: Partial<TourRefs>): void {
-  scene.background = new THREE.Color(0x06080e);
-  scene.fog = new THREE.Fog(0x0a1018, 50, 200);
-  // Cinematic golden-hour to blue-hour gradient sky dome
+  scene.background = new THREE.Color(0x22304a);
+  // Warm dusk haze — distant city gets atmospheric perspective, the villa
+  // foreground stays crisp (fog near-plane is beyond every tour camera).
+  scene.fog = new THREE.Fog(0x8a7058, 65, 260);
+  // Golden-hour gradient sky dome. CanvasTexture flipY + SphereGeometry UVs
+  // map canvas TOP (y=0) to the zenith and canvas BOTTOM to the horizon —
+  // the previous gradient was authored the other way round, which is why the
+  // dusk sky read muddy: its "deep navy upper sky" stop rendered at the
+  // horizon under the warm overlay band.
   const skyCanvas = document.createElement("canvas");
   skyCanvas.width = 4;
   skyCanvas.height = 512;
   const sctx = skyCanvas.getContext("2d")!;
-  const grad = sctx.createLinearGradient(0, 512, 0, 0);
-  grad.addColorStop(0.00, "#0f1a2e");  // deep navy upper sky
-  grad.addColorStop(0.15, "#142238");  // dark blue
-  grad.addColorStop(0.30, "#1a2a42");  // mid blue
-  grad.addColorStop(0.45, "#243040");  // blue-purple transition
-  grad.addColorStop(0.55, "#2e3840");  // horizon transition
-  grad.addColorStop(0.65, "#3a362e");  // warm horizon
-  grad.addColorStop(0.75, "#4a3e28");  // golden hour glow
-  grad.addColorStop(0.85, "#3d3424");  // warm fade
-  grad.addColorStop(1.00, "#2a241e");  // near horizon warmth
+  const grad = sctx.createLinearGradient(0, 0, 0, 512);
+  grad.addColorStop(0.0, "#16233c"); // zenith — deep dusk blue
+  grad.addColorStop(0.3, "#27406b"); // upper — blue-hour blue
+  grad.addColorStop(0.55, "#5a6a8a"); // mid — hazy blue-gray
+  grad.addColorStop(0.74, "#a97e5c"); // warm haze transition
+  grad.addColorStop(0.88, "#e0a05e"); // golden band
+  grad.addColorStop(1.0, "#f2b878"); // horizon — gold haze
   sctx.fillStyle = grad;
   sctx.fillRect(0, 0, 4, 512);
-  // Horizon glow band
-  const horizonGrad = sctx.createLinearGradient(0, 440, 0, 512);
-  horizonGrad.addColorStop(0, "rgba(80,60,35,0)");
-  horizonGrad.addColorStop(0.4, "rgba(100,75,40,0.25)");
-  horizonGrad.addColorStop(1, "rgba(120,90,45,0.45)");
+  // Horizon glow band, concentrated at the very bottom (horizon).
+  const horizonGrad = sctx.createLinearGradient(0, 400, 0, 512);
+  horizonGrad.addColorStop(0, "rgba(255,190,120,0)");
+  horizonGrad.addColorStop(0.5, "rgba(255,180,110,0.22)");
+  horizonGrad.addColorStop(1, "rgba(255,170,95,0.5)");
   sctx.fillStyle = horizonGrad;
-  sctx.fillRect(0, 440, 4, 72);
+  sctx.fillRect(0, 400, 4, 112);
   const skyTex = new THREE.CanvasTexture(skyCanvas);
   skyTex.colorSpace = THREE.SRGBColorSpace;
   const dome = new THREE.Mesh(
@@ -554,30 +604,30 @@ function buildSky(scene: THREE.Scene, refs: Partial<TourRefs>): void {
   dome.position.y = 15;
   scene.add(dome);
 
-  // Sun/Moon disc - warm golden hour sun
+  // Low golden-hour sun — warm disc + layered glow, sitting on the treeline.
   const glowTex = glowSpriteTexture();
   const corona = new THREE.Mesh(
-    new THREE.PlaneGeometry(56, 56),
-    new THREE.MeshBasicMaterial({ map: glowTex, transparent: true, opacity: 0.22, depthWrite: false, fog: false, color: 0xffcc88, blending: THREE.AdditiveBlending })
+    new THREE.PlaneGeometry(70, 70),
+    new THREE.MeshBasicMaterial({ map: glowTex, transparent: true, opacity: 0.3, depthWrite: false, fog: false, color: 0xffb066, blending: THREE.AdditiveBlending })
   );
-  corona.position.set(-70, 32, -120);
+  corona.position.set(-70, 20, -120);
   corona.lookAt(0, 4, 0);
   scene.add(corona);
   const halo = new THREE.Mesh(
-    new THREE.PlaneGeometry(32, 32),
-    new THREE.MeshBasicMaterial({ map: glowTex, transparent: true, opacity: 0.55, depthWrite: false, fog: false, color: 0xffdd99 })
+    new THREE.PlaneGeometry(36, 36),
+    new THREE.MeshBasicMaterial({ map: glowTex, transparent: true, opacity: 0.6, depthWrite: false, fog: false, color: 0xffd08a })
   );
-  halo.position.set(-70, 32, -119.5);
+  halo.position.set(-70, 20, -119.5);
   halo.lookAt(0, 4, 0);
   scene.add(halo);
-  const sun = new THREE.Mesh(new THREE.CircleGeometry(4.0, 48), new THREE.MeshBasicMaterial({ color: 0xfff0d0, fog: false }));
-  sun.position.set(-70, 32, -119);
+  const sun = new THREE.Mesh(new THREE.CircleGeometry(4.6, 48), new THREE.MeshBasicMaterial({ color: 0xffe8c0, fog: false }));
+  sun.position.set(-70, 20, -119);
   sun.lookAt(0, 4, 0);
   scene.add(sun);
 
-  // Premium starfield — subtle, only upper sky
+  // Faint early stars high in the blue-hour zenith (subtle, upper sky only).
   const starGeo = new THREE.BufferGeometry();
-  const starCount = 200;
+  const starCount = 120;
   const positions = new Float32Array(starCount * 3);
   const sizes = new Float32Array(starCount);
   const alphas = new Float32Array(starCount);
@@ -585,7 +635,7 @@ function buildSky(scene: THREE.Scene, refs: Partial<TourRefs>): void {
   for (let i = 0; i < starCount; i += 1) {
     const r = 90 + rand() * 60;
     const theta = rand() * Math.PI * 2;
-    const phi = rand() * Math.PI * 0.35;  // only upper hemisphere
+    const phi = rand() * Math.PI * 0.3; // only upper hemisphere
     positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
     positions[i * 3 + 1] = r * Math.cos(phi) + 8;
     positions[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
@@ -599,24 +649,24 @@ function buildSky(scene: THREE.Scene, refs: Partial<TourRefs>): void {
     color: 0xe8eef8,
     size: 1,
     transparent: true,
-    opacity: 1,
+    opacity: 0.28, // dusk — stars only just appearing at zenith
     fog: false,
     vertexColors: false,
     sizeAttenuation: true,
   });
   scene.add(new THREE.Points(starGeo, starMat));
 
-  // Slow atmospheric clouds — golden hour tinted
+  // Slow atmospheric clouds — warm dusk-tinted wisps.
   const puff = puffTexture();
   const clouds: THREE.Mesh[] = [];
   const defs: Array<[number, number, number, number, number]> = [
-    [-55, 35, -100, 38, 0.22], [15, 42, -105, 45, 0.18], [65, 34, -98, 32, 0.24], [-20, 28, -90, 24, 0.16],
-    [-70, 30, -85, 28, 0.14], [80, 38, -92, 35, 0.16], [0, 45, -110, 50, 0.12],
+    [-55, 35, -100, 38, 0.26], [15, 42, -105, 45, 0.22], [65, 34, -98, 32, 0.28], [-20, 28, -90, 24, 0.18],
+    [-70, 30, -85, 28, 0.16], [80, 38, -92, 35, 0.18], [0, 45, -110, 50, 0.14],
   ];
   for (const [x, y, z, s, o] of defs) {
     const cloud = new THREE.Mesh(
       new THREE.PlaneGeometry(s, s * 0.35),
-      new THREE.MeshBasicMaterial({ map: puff, transparent: true, opacity: o, depthWrite: false, fog: false })
+      new THREE.MeshBasicMaterial({ map: puff, color: 0xd9b896, transparent: true, opacity: o, depthWrite: false, fog: false })
     );
     cloud.position.set(x, y, z);
     cloud.lookAt(0, 5, 0);
@@ -1375,16 +1425,16 @@ function buildExterior(scene: THREE.Scene, refs: Partial<TourRefs>, simplified: 
   basin.castShadow = false;
   scene.add(basin);
   const waterMat = new THREE.MeshPhysicalMaterial({
-    color: 0x0a1f2e,            // deeper ocean blue
+    color: 0x0e2836,            // deep pool blue under dusk sky
     roughness: 0.02,            // very smooth water surface
     metalness: 0.45,            // slight metalness for water quality
     transparent: true,
     opacity: 0.96,
     clearcoat: 1,
     clearcoatRoughness: 0.02,
-    emissive: 0x083048,         // deep blue glow
-    emissiveIntensity: 0.45,
-    envMapIntensity: 2.2,       // stronger environment reflections
+    emissive: 0x0a2a3a,         // faint in-pool glow
+    emissiveIntensity: 0.22,
+    envMapIntensity: 2.4,       // golden-hour sky reflections
     transmission: 0.9,          // clear water effect
     thickness: 0.02,
     ior: 1.33,                  // water index of refraction
@@ -1410,6 +1460,7 @@ function buildExterior(scene: THREE.Scene, refs: Partial<TourRefs>, simplified: 
     poolLight.position.set(15, 1.5, -2);
     poolLight.intensity = 20;
     scene.add(poolLight);
+    (refs.secondaryLights = refs.secondaryLights ?? []).push(poolLight);
   }
   // Teak loungers with cushions + umbrella + side table.
   for (const [x, z] of [[11.6, 2.1], [18.4, 2.1]] as const) {
@@ -1613,6 +1664,7 @@ function buildExterior(scene: THREE.Scene, refs: Partial<TourRefs>, simplified: 
     const poleLight = new THREE.PointLight(AMBER, 12, 15, 1.8);
     poleLight.position.set(-15, 4.4, 3.5);
     scene.add(poleLight);
+    (refs.secondaryLights = refs.secondaryLights ?? []).push(poleLight);
     scene.add(cyl(0.06, 0.08, 4.4, mat(0x23282e, 0.6, 0.4), -15, 2.2, 3.5, 8));
     const head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 10, 10), new THREE.MeshBasicMaterial({ color: AMBER }));
     head.position.set(-15, 4.45, 3.5);
@@ -1622,6 +1674,7 @@ function buildExterior(scene: THREE.Scene, refs: Partial<TourRefs>, simplified: 
   const terraceGlow = new THREE.PointLight(AMBER, 16, 17, 1.8);
   terraceGlow.position.set(0, 8.2, -14);
   scene.add(terraceGlow);
+  (refs.secondaryLights = refs.secondaryLights ?? []).push(terraceGlow);
 }
 
 // ----------------------------------------------------------------- city ---
@@ -1837,9 +1890,10 @@ export function collectPerfStats(scene: THREE.Scene, renderer: THREE.WebGLRender
 }
 
 /**
- * Night IBL without external assets: PMREM a tiny procedural night
- * environment (dark blue dome + warm window strip) so PBR glass/metal/water
- * pick up believable reflections. Safe no-op on failure.
+ * Golden-hour IBL without external assets: PMREM a tiny procedural sunset
+ * environment (blue-hour zenith → warm gold horizon band) so PBR
+ * glass/metal/water pick up believable dusk reflections. Safe no-op on
+ * failure.
  */
 export async function enhanceWithEnvironment(scene: THREE.Scene, renderer: THREE.WebGLRenderer): Promise<void> {
   try {
@@ -1850,14 +1904,15 @@ export async function enhanceWithEnvironment(scene: THREE.Scene, renderer: THREE
     envCanvas.height = 32;
     const ectx = envCanvas.getContext("2d")!;
     const egrad = ectx.createLinearGradient(0, 32, 0, 0);
-    egrad.addColorStop(0.0, "#3a2a1a");
-    egrad.addColorStop(0.45, "#0a1020");
-    egrad.addColorStop(1.0, "#02040a");
+    egrad.addColorStop(0.0, "#c8873e"); // warm gold horizon
+    egrad.addColorStop(0.35, "#7a6a56"); // warm haze
+    egrad.addColorStop(0.7, "#2c405e"); // blue hour
+    egrad.addColorStop(1.0, "#16233c"); // dusk zenith
     ectx.fillStyle = egrad;
     ectx.fillRect(0, 0, 64, 32);
-    // Warm window band for reflections.
-    ectx.fillStyle = "#c8823a";
-    ectx.fillRect(8, 15, 48, 4);
+    // Warm low-sun band for reflections.
+    ectx.fillStyle = "#ffb066";
+    ectx.fillRect(6, 21, 52, 3);
     const envTex = new THREE.CanvasTexture(envCanvas);
     envTex.colorSpace = THREE.SRGBColorSpace;
     envTex.mapping = THREE.EquirectangularReflectionMapping;
@@ -1870,7 +1925,7 @@ export async function enhanceWithEnvironment(scene: THREE.Scene, renderer: THREE
     geo.dispose();
     (envMesh.material as THREE.Material).dispose();
   } catch {
-    // Lights-only PBR still reads premium under the night grade.
+    // Lights-only PBR still reads premium under the dusk grade.
   }
 }
 
@@ -1880,58 +1935,67 @@ export async function enhanceWithEnvironment(scene: THREE.Scene, renderer: THREE
  */
 export function createTourWorld(scene: THREE.Scene, simplified: boolean): TourRefs {
   HI_RES = !simplified;
-  const partial: Partial<TourRefs> = { entryGlow: [], roomAccents: {}, movingCars: [] };
+  // Fresh glass registry for this world build (old entries belonged to the
+  // previous, disposed scene).
+  glassRegistry.length = 0;
+  const partial: Partial<TourRefs> = { entryGlow: [], roomAccents: {}, movingCars: [], secondaryLights: [], shadowCasters: [] };
 
-  // Night key: dim blue sky fill + cool moonlight (shadow caster) + warm golden hour bounce.
-  scene.add(new THREE.HemisphereLight(0x2a3a58, 0x0c0a08, 0.65));
-  const moon = new THREE.DirectionalLight(0x8fa8d8, 0.85);
-  moon.position.set(-28, 26, 14);
-  moon.castShadow = !simplified;
-  moon.shadow.mapSize.set(simplified ? 512 : 1024, simplified ? 512 : 1024);
-  moon.shadow.camera.left = -32;
-  moon.shadow.camera.right = 32;
-  moon.shadow.camera.top = 28;
-  moon.shadow.camera.bottom = -24;
-  moon.shadow.camera.far = 120;
-  moon.shadow.bias = -0.0004;
-  moon.shadow.normalBias = 0.02;
-  scene.add(moon);
-  partial.sunLight = moon;
+  // Golden-hour rig: soft blue sky dome above + warm sun low on the horizon
+  // (matches the sun disc in buildSky) casting long architectural shadows,
+  // with a warm facade key and cool sky bounce so shadow sides stay open.
+  scene.add(new THREE.HemisphereLight(0x9db4d8, 0x4a3c2a, 0.75));
+  const sun = new THREE.DirectionalLight(0xffb070, 1.5);
+  sun.position.set(-70, 24, -100);
+  sun.castShadow = !simplified;
+  sun.shadow.mapSize.set(simplified ? 512 : 1024, simplified ? 512 : 1024);
+  sun.shadow.camera.left = -32;
+  sun.shadow.camera.right = 32;
+  sun.shadow.camera.top = 28;
+  sun.shadow.camera.bottom = -24;
+  sun.shadow.camera.far = 220;
+  sun.shadow.bias = -0.0004;
+  sun.shadow.normalBias = 0.02;
+  scene.add(sun);
+  partial.sunLight = sun;
 
-  // Golden hour key light - warm, directional from upper-left to create depth.
-  const keyLight = new THREE.DirectionalLight(0xffa500, 0.45); // warm golden
-  keyLight.position.set(-15, 20, -10);
+  // Warm facade key from front-right — models the volumes the hero camera
+  // sees and anchors the entrance composition.
+  const keyLight = new THREE.DirectionalLight(0xffd2a0, 0.75);
+  keyLight.position.set(30, 26, 30);
   keyLight.castShadow = !simplified;
   keyLight.shadow.mapSize.set(simplified ? 512 : 1024, simplified ? 512 : 1024);
   keyLight.shadow.camera.left = -32;
   keyLight.shadow.camera.right = 32;
   keyLight.shadow.camera.top = 28;
   keyLight.shadow.camera.bottom = -24;
-  keyLight.shadow.camera.far = 120;
+  keyLight.shadow.camera.far = 140;
   keyLight.shadow.bias = -0.0008;
   keyLight.shadow.radius = 4;
   scene.add(keyLight);
+  partial.keyLight = keyLight;
 
-  // Warm fill light to balance shadows without crushing them.
-  const fill = new THREE.DirectionalLight(0xff8c00, 0.22); // warmer fill
-  fill.position.set(18, 16, 16);
+  // Warm bounce fill to balance shadows without crushing them.
+  const fill = new THREE.DirectionalLight(0xffc9a0, 0.3);
+  fill.position.set(18, 12, 20);
   scene.add(fill);
+  (partial.secondaryLights = partial.secondaryLights ?? []).push(fill);
 
   // Subtle rim separation light - back/right to outline the villa.
-  const rimLight = new THREE.DirectionalLight(0xffd9a0, 0.15); // warm rim
+  const rimLight = new THREE.DirectionalLight(0xffe0b0, 0.3);
   rimLight.position.set(20, 12, -20);
-  rimLight.castShadow = false;
   scene.add(rimLight);
+  (partial.secondaryLights = partial.secondaryLights ?? []).push(rimLight);
 
   // Enhanced warm wash over the entrance facade so the door reads cinematically.
   const entryWash = new THREE.PointLight(AMBER, 36, 28, 1.8);
   entryWash.position.set(0, 3.8, 6.5);
   scene.add(entryWash);
 
-  // Slightly stronger cool fill so shadow sides never crush to black.
-  const coolFill = new THREE.DirectionalLight(0x5a6a8a, 0.28);
+  // Cool sky fill so shadow sides never crush to black.
+  const coolFill = new THREE.DirectionalLight(0x6a82b0, 0.22);
   coolFill.position.set(30, 22, 25);
   scene.add(coolFill);
+  (partial.secondaryLights = partial.secondaryLights ?? []).push(coolFill);
 
   buildSky(scene, partial);
   buildGround(scene);
@@ -1950,6 +2014,9 @@ export function createTourWorld(scene: THREE.Scene, simplified: boolean): TourRe
   if (simplified) {
     interiorSpot.intensity = 40;
   }
+  partial.interiorSpot = interiorSpot;
+  partial.shadowCasters = [sun, keyLight, interiorSpot];
+  partial.glassMats = glassRegistry.slice();
 
   return {
     doorLeft: partial.doorLeft!,
@@ -1963,7 +2030,91 @@ export function createTourWorld(scene: THREE.Scene, simplified: boolean): TourRe
     clouds: partial.clouds ?? [],
     roomAccents: partial.roomAccents ?? {},
     movingCars: partial.movingCars ?? [],
-    sunLight: partial.sunLight!,
+    sunLight: sun,
     porchZone: partial.porchZone!,
+    keyLight,
+    secondaryLights: partial.secondaryLights ?? [],
+    glassMats: partial.glassMats,
+    shadowCasters: partial.shadowCasters,
   };
+}
+
+export interface LiveQualitySettings {
+  maxPixelRatio: number;
+  shadows: boolean;
+  shadowMapSize: number;
+  secondaryLights: boolean;
+  atmosphere: boolean;
+  glassTransmission: boolean;
+}
+
+/**
+ * Apply a quality plan to a LIVE world — pixel ratio, shadows, shadow-map
+ * size, accent lights, cloud/traffic visibility and glass transmission are
+ * swapped in place. The scene graph, camera state, room position and
+ * animations are untouched: no rebuild, no lost camera, no flicker of a new
+ * world. Safe to call repeatedly (idempotent per setting).
+ */
+export function applyLiveQuality(
+  scene: THREE.Scene,
+  renderer: THREE.WebGLRenderer,
+  refs: TourRefs,
+  settings: LiveQualitySettings
+): void {
+  try {
+    renderer.setPixelRatio(Math.max(0.5, settings.maxPixelRatio));
+
+    if (renderer.shadowMap.enabled !== settings.shadows) {
+      renderer.shadowMap.enabled = settings.shadows;
+      // three.js caches shadow support per program — all materials must
+      // recompile once when the global shadow flag flips.
+      const seen = new Set<THREE.Material>();
+      scene.traverse((obj) => {
+        const m = (obj as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+        const bump = (x: THREE.Material) => {
+          if (seen.has(x)) return;
+          seen.add(x);
+          x.needsUpdate = true;
+        };
+        if (Array.isArray(m)) m.forEach(bump);
+        else if (m) bump(m);
+      });
+    }
+
+    for (const light of refs.shadowCasters) {
+      light.castShadow = settings.shadows;
+      if (light.shadow.mapSize.width !== settings.shadowMapSize) {
+        light.shadow.mapSize.set(settings.shadowMapSize, settings.shadowMapSize);
+        // Release the old map so the next shadow pass reallocates at the new
+        // size instead of keeping the high-res buffer alive.
+        light.shadow.map?.dispose();
+        light.shadow.map = null;
+      }
+    }
+
+    for (const light of refs.secondaryLights) light.visible = settings.secondaryLights;
+
+    for (const cloud of refs.clouds) cloud.visible = settings.atmosphere;
+    for (const car of refs.movingCars) car.visible = settings.atmosphere;
+
+    for (const glass of refs.glassMats) {
+      const baseOpacity = (glass.userData.baseraOpacity as number | undefined) ?? 0.3;
+      const baseTransmission = (glass.userData.baseraTransmission as number | undefined) ?? 0.8;
+      if (settings.glassTransmission) {
+        if (glass.transmission !== baseTransmission || glass.opacity !== baseOpacity) {
+          glass.transmission = baseTransmission;
+          glass.opacity = baseOpacity;
+          glass.needsUpdate = true;
+        }
+      } else if (glass.transmission !== 0) {
+        // Cheap glass: plain alpha blend, slightly denser so it still reads
+        // as tinted architectural glazing.
+        glass.transmission = 0;
+        glass.opacity = Math.min(0.55, baseOpacity + 0.12);
+        glass.needsUpdate = true;
+      }
+    }
+  } catch {
+    // Quality must never break the tour — worst case the previous tier stays.
+  }
 }

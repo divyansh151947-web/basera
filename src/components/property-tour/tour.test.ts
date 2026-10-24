@@ -6,7 +6,20 @@ import { fileURLToPath } from "node:url";
 vi.mock("server-only", () => ({}));
 
 import { CAMERA_PRESETS, HOTSPOTS, NAV_ORDER } from "./tour-types";
-import { detectLowPowerDevice, easeInOutCubic, frameStride, isCoarseViewport, lerp, prefersReducedMotion, resolveTourEnv } from "./tour-env";
+import {
+  GL_ATTEMPTS,
+  detectLowPowerDevice,
+  easeInOutCubic,
+  frameStride,
+  isCoarseViewport,
+  isQualityPref,
+  lerp,
+  prefersReducedMotion,
+  probeWebGL,
+  qualityPlan,
+  resolveQualityLevel,
+  resolveTourEnv,
+} from "./tour-env";
 import { DOOR_DOLLY_MS, FLIGHT_MS, startFlight, stepFlight } from "./tour-camera";
 import { routeTourCommand } from "./tour-command";
 import { JOURNEY_CAMERAS, JOURNEY_STAGES, journeyCamera, journeyOrbitAngle, stageForProgress } from "./tour-journey";
@@ -94,6 +107,52 @@ describe("tour environment tiers", () => {
   it("frame stride halves GPU on LOW while HIGH renders every frame", () => {
     expect(frameStride(false)).toBe(1);
     expect(frameStride(true)).toBe(2);
+  });
+});
+
+describe("adaptive quality system (pure)", () => {
+  it("WebGL probe ladder always ends with a relaxed fallback (no high-performance requirement)", () => {
+    expect(GL_ATTEMPTS.length).toBeGreaterThanOrEqual(2);
+    expect(GL_ATTEMPTS[0]).toEqual({ antialias: true, highPerformance: true });
+    const last = GL_ATTEMPTS[GL_ATTEMPTS.length - 1];
+    expect(last.highPerformance).toBe(false);
+    expect(GL_ATTEMPTS.some((a) => a.highPerformance === false)).toBe(true);
+  });
+
+  it("probeWebGL is safe without a DOM (node)", () => {
+    expect(probeWebGL()).toEqual({ ok: false, attempt: -1 });
+  });
+
+  it("manual quality preferences are always honored; auto is capability-based", () => {
+    expect(resolveQualityLevel("high", { viewportWidth: 390, lowPower: true, webgl: true })).toBe("high");
+    expect(resolveQualityLevel("performance", { viewportWidth: 1440, lowPower: false, webgl: true })).toBe("performance");
+    // Auto: desktop capable → high; weak/mobile → performance; no WebGL → performance.
+    expect(resolveQualityLevel("auto", { viewportWidth: 1440, lowPower: false, webgl: true })).toBe("high");
+    expect(resolveQualityLevel("auto", { viewportWidth: 390, lowPower: false, webgl: true })).toBe("performance");
+    expect(resolveQualityLevel("auto", { viewportWidth: 1440, lowPower: true, webgl: true })).toBe("performance");
+    expect(resolveQualityLevel("auto", { viewportWidth: 1440, lowPower: false, webgl: false })).toBe("performance");
+  });
+
+  it("quality plans trade GPU cost down tier by tier without touching the scene", () => {
+    const high = qualityPlan("high", 1440, 2);
+    expect(high).toMatchObject({ shadows: true, secondaryLights: true, atmosphere: true, glassTransmission: true, stride: 1 });
+    expect(high.maxPixelRatio).toBe(2);
+    const balanced = qualityPlan("balanced", 1440, 2);
+    expect(balanced.glassTransmission).toBe(false);
+    expect(balanced.shadows).toBe(true);
+    expect(balanced.stride).toBe(1);
+    const perf = qualityPlan("performance", 1440, 2);
+    expect(perf).toMatchObject({ shadows: false, secondaryLights: false, atmosphere: false, glassTransmission: false, stride: 2 });
+    expect(perf.maxPixelRatio).toBe(1);
+    // Phones keep a slightly higher pixel cap under performance (tiny CSS pixels).
+    expect(qualityPlan("performance", 390, 3).maxPixelRatio).toBe(1.5);
+  });
+
+  it("quality preference validation rejects unknown stored values", () => {
+    expect(isQualityPref("auto")).toBe(true);
+    expect(isQualityPref("ultra")).toBe(false);
+    expect(isQualityPref(null)).toBe(false);
+    expect(isQualityPref(undefined)).toBe(false);
   });
 });
 
