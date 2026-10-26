@@ -19,6 +19,7 @@
     "db:generate:pg": "drizzle-kit generate --config=drizzle.pg.config.ts"
   },
   "dependencies": {
+    "@getbrevo/brevo": "^6.2.0",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^13.0.3",
     "clsx": "^2.1.1",

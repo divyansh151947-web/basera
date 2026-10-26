@@ -2,6 +2,7 @@ import "server-only";
 
 import { Resend } from "resend";
 import nodemailer from "nodemailer";
+import { BrevoClient } from "@getbrevo/brevo";
 
 // Production email setup notes:
 // 1. Add a verified domain in Resend.
@@ -61,6 +62,15 @@ export function hasEmailProviderConfig() {
   return Boolean(process.env.RESEND_API_KEY?.trim());
 }
 
+export function hasBrevoConfig() {
+  return Boolean(process.env.BREVO_API_KEY?.trim());
+}
+
+export function getBrevoFromAddress() {
+  // EMAIL_FROM is the canonical sender; BREVO_FROM is kept as an alias.
+  return process.env.EMAIL_FROM?.trim() || process.env.BREVO_FROM?.trim() || "Basera <onboarding@resend.dev>";
+}
+
 export interface SmtpConfig {
   host: string;
   port: number;
@@ -91,13 +101,28 @@ export function hasSmtpConfig() {
   return getSmtpConfig() !== null;
 }
 
-export type ActiveEmailProvider = "smtp" | "resend" | "none";
+export type ActiveEmailProvider = "smtp" | "brevo" | "resend" | "none";
 
-/** Provider selection: SMTP wins when fully configured, else Resend, else none. */
+/** Provider selection: SMTP wins when fully configured, else Brevo, else Resend, else none. */
 export function getActiveEmailProvider(): ActiveEmailProvider {
   if (hasSmtpConfig()) return "smtp";
+  if (hasBrevoConfig()) return "brevo";
   if (hasEmailProviderConfig()) return "resend";
   return "none";
+}
+
+/**
+ * Provider label for results produced AFTER the no-provider guard has run:
+ * identical to getActiveEmailProvider() but never "none" (DeliverEmailResult
+ * only allows smtp|brevo|resend). Reported honestly — a refusal that happened while
+ * SMTP was the active provider must never claim "brevo" or "resend", because wrong
+ * provider metadata in logs actively misdirects delivery debugging.
+ */
+function activeProviderForMetadata(): "smtp" | "brevo" | "resend" {
+  const active = getActiveEmailProvider();
+  if (active === "smtp") return "smtp";
+  if (active === "brevo") return "brevo";
+  return "resend";
 }
 
 /** Extract the sender domain for safe diagnostic metadata (no PII). */
@@ -107,12 +132,15 @@ export function getSenderDomain(from?: string) {
   return match ? match[1].toLowerCase() : "unknown";
 }
 
-/** Sender domain of the provider that would ACTUALLY deliver (smtp > resend
+/** Sender domain of the provider that would ACTUALLY deliver (smtp > brevo > resend
  *  > none) for diagnostics — domain only, never the full address/credentials. */
 export function getActiveSenderDomain(): string {
   if (hasSmtpConfig()) {
     const smtp = getSmtpConfig();
     return getSenderDomain(smtp ? smtp.from : undefined);
+  }
+  if (hasBrevoConfig()) {
+    return getSenderDomain(getBrevoFromAddress());
   }
   if (hasEmailProviderConfig()) {
     return getSenderDomain(getResendFromAddress());
@@ -128,10 +156,14 @@ export function getActiveSenderDomain(): string {
 export function getEmailDiagnostics() {
   const appOrigin = getAppUrl();
   const active = getActiveEmailProvider();
-  const sender = active === "smtp" ? (getSmtpConfig()?.from ?? getResendFromAddress()) : getResendFromAddress();
+  let sender: string;
+  if (active === "smtp") sender = getSmtpConfig()?.from ?? getResendFromAddress();
+  else if (active === "brevo") sender = getBrevoFromAddress();
+  else sender = getResendFromAddress();
   return {
     emailProvider: active,
     apiKeyConfigured: hasEmailProviderConfig(),
+    brevoConfigured: hasBrevoConfig(),
     smtpConfigured: hasSmtpConfig(),
     sender,
     senderDomain: getSenderDomain(sender),
@@ -150,7 +182,7 @@ export interface DeliverEmailInput {
 export interface DeliverEmailResult {
   ok: boolean;
   reason: string;
-  provider: "smtp" | "resend";
+  provider: "smtp" | "brevo" | "resend";
   id?: string | null;
   error?: unknown;
 }
@@ -213,16 +245,98 @@ async function sendViaResend(input: DeliverEmailInput): Promise<DeliverEmailResu
   return { ok: true, reason: "sent", provider: "resend", id: response.data?.id ?? null };
 }
 
+export type BrevoFailureReason =
+  | "invalid_api_key"
+  | "invalid_sender"
+  | "rejected"
+  | "rate_limited";
+
+function classifyBrevoError(error: { statusCode?: unknown; message?: unknown; name?: unknown }): BrevoFailureReason {
+  const status = typeof error?.statusCode === "number" ? error.statusCode : null;
+  const message = typeof error?.message === "string" ? error.message.toLowerCase() : "";
+  if (status === 401) return "invalid_api_key";
+  if (status === 429) return "rate_limited";
+  if (status === 400 || status === 403 || /sender|domain|not allowed|forbidden|invalid/i.test(message)) {
+    return "invalid_sender";
+  }
+  return "rejected";
+}
+
+async function sendViaBrevo(input: DeliverEmailInput): Promise<DeliverEmailResult> {
+  const client = new BrevoClient({ auth: { apiKey: process.env.BREVO_API_KEY! } });
+  const senderEmail = getBrevoFromAddress().match(/<([^>]+)>/)?.[1] ?? getBrevoFromAddress();
+  const senderName = getBrevoFromAddress().match(/^"?([^"<]+)"?\s*</)?.[1]?.trim() ?? "Basera";
+  try {
+    const response = await withEmailTimeout(
+      client.transactionalEmails.sendTransacEmail({
+        sender: { email: senderEmail, name: senderName },
+        to: [{ email: input.to }],
+        subject: input.subject,
+        htmlContent: input.html,
+        textContent: input.text,
+      })
+    );
+    return { ok: true, reason: "sent", provider: "brevo", id: response.messageId ?? null };
+  } catch (error) {
+    const err = error as { statusCode?: number; body?: unknown; message?: string };
+    const statusCode = err.statusCode;
+    const message = typeof err.body === "string" ? err.body : err.message ?? String(error);
+    return {
+      ok: false,
+      reason: classifyBrevoError({ statusCode, message }),
+      provider: "brevo",
+      error,
+    };
+  }
+}
+
 /**
  * Single delivery entry point used by every transactional sender.
- * SMTP (fully configured) wins for local/dev; otherwise the existing
- * Resend path runs unchanged. The recipient always comes from the caller
- * (the account/request email) — SMTP_USER is sender/auth only and is never
- * substituted as a recipient here or anywhere else.
+ * SMTP (fully configured) is tried first for local/dev; if it fails and
+ * Brevo is configured, we fall back to Brevo; if Brevo fails and Resend is
+ * configured, we fall back to Resend. The recipient always comes from the
+ * caller (the account/request email) — SMTP_USER is sender/auth only and is
+ * never substituted as a recipient here or anywhere else.
+ *
+ * Fails closed when NO provider is configured: never constructs a client with
+ * an undefined key, never throws, and reports the same `missing_api_key`
+ * reason the higher-level senders use. Callers must treat ok:false as "not
+ * sent" — never as success.
  */
 export async function deliverEmail(input: DeliverEmailInput): Promise<DeliverEmailResult> {
   const smtp = getSmtpConfig();
-  if (smtp) return sendViaSmtp(input, smtp);
+  if (smtp) {
+    const smtpResult = await sendViaSmtp(input, smtp);
+    // If SMTP fails and Brevo is configured, fall back to Brevo
+    if (!smtpResult.ok && hasBrevoConfig()) {
+      console.warn("[email] SMTP delivery failed, falling back to Brevo", {
+        ...getEmailDiagnostics(),
+        smtpReason: smtpResult.reason,
+        fallbackProvider: "brevo",
+      });
+      return sendViaBrevo(input);
+    }
+    // If SMTP fails and Resend is configured, fall back to Resend
+    if (!smtpResult.ok && hasEmailProviderConfig()) {
+      console.warn("[email] SMTP delivery failed, falling back to Resend", {
+        ...getEmailDiagnostics(),
+        smtpReason: smtpResult.reason,
+        fallbackProvider: "resend",
+      });
+      return sendViaResend(input);
+    }
+    return smtpResult;
+  }
+  if (hasBrevoConfig()) {
+    return sendViaBrevo(input);
+  }
+  if (!hasEmailProviderConfig()) {
+    console.warn("[email] Delivery skipped: no email provider is configured.", {
+      ...getEmailDiagnostics(),
+      reason: "missing_api_key",
+    });
+    return { ok: false, reason: "missing_api_key", provider: "resend" };
+  }
   return sendViaResend(input);
 }
 
@@ -245,22 +359,29 @@ export async function sendPasswordResetEmail({
   }
 
   if (!assertEmailUrlSafe()) {
-    // Production must never email localhost links to real inboxes.
+    // Production must never email localhost links to real inboxes. Include
+    // the safe diagnostics so server logs show WHICH origin failed and which
+    // provider would have sent — no secrets, tokens, or recipients.
     console.error("[email] Refusing to send: APP_URL is not a public HTTPS origin in production.", {
+      ...getEmailDiagnostics(),
       reason: "unsafe_app_url",
     });
-    return { ok: false, reason: "unsafe_app_url", provider: "resend" as const };
+    return { ok: false, reason: "unsafe_app_url", provider: activeProviderForMetadata() };
   }
 
   // Validate the active sender before touching the network: a malformed
   // From address can never be accepted, so fail fast with a clear reason.
-  const from = getActiveEmailProvider() === "smtp" ? (getSmtpConfig()?.from ?? "") : getResendFromAddress();
+  let from: string;
+  const activeProvider = getActiveEmailProvider();
+  if (activeProvider === "smtp") from = getSmtpConfig()?.from ?? "";
+  else if (activeProvider === "brevo") from = getBrevoFromAddress();
+  else from = getResendFromAddress();
   if (!isValidSenderAddress(from)) {
     console.error("[email] Refusing to send: sender address is malformed.", {
       ...getEmailDiagnostics(),
       reason: "invalid_sender",
     });
-    return { ok: false, reason: "invalid_sender", provider: "resend" as const };
+    return { ok: false, reason: "invalid_sender", provider: activeProviderForMetadata() };
   }
 
   const resetUrl = getResetPasswordUrl(token);
@@ -305,14 +426,16 @@ export async function sendPasswordResetEmail({
   if (!result.ok) {
     console.error("[email] Password reset email failed", {
       ...getEmailDiagnostics(),
+      actualProvider: result.provider,
       reason: result.reason,
       error: result.error ?? null,
     });
     return { ok: false, reason: result.reason, provider: result.provider, error: result.error };
   }
 
-  console.info("[email] Password reset email sent successfully", {
+  console.info("[email] Password reset email accepted by provider", {
     ...getEmailDiagnostics(),
+    actualProvider: result.provider,
     emailId: result.id ?? null,
   });
 
@@ -433,10 +556,30 @@ export async function sendVerificationEmail({
   }
 
   if (!assertEmailUrlSafe()) {
+    // Same honesty rule as the reset sender: log the failing origin + active
+    // provider (secret-free) so a localhost APP_URL in production mode is
+    // immediately legible from server logs alone.
     console.error("[email] Refusing to send: APP_URL is not a public HTTPS origin in production.", {
+      ...getEmailDiagnostics(),
       reason: "unsafe_app_url",
     });
-    return { ok: false, reason: "unsafe_app_url", provider: "resend" as const };
+    return { ok: false, reason: "unsafe_app_url", provider: activeProviderForMetadata() };
+  }
+
+  // Validate the active sender before touching the network — same guard as
+  // the password-reset sender: a malformed From address can never be
+  // accepted, so fail fast with a clear reason.
+  let from: string;
+  const activeProvider = getActiveEmailProvider();
+  if (activeProvider === "smtp") from = getSmtpConfig()?.from ?? "";
+  else if (activeProvider === "brevo") from = getBrevoFromAddress();
+  else from = getResendFromAddress();
+  if (!isValidSenderAddress(from)) {
+    console.error("[email] Refusing to send: sender address is malformed.", {
+      ...getEmailDiagnostics(),
+      reason: "invalid_sender",
+    });
+    return { ok: false, reason: "invalid_sender", provider: activeProviderForMetadata() };
   }
 
   const verifyUrl = getVerifyEmailUrl(token);
@@ -480,16 +623,150 @@ export async function sendVerificationEmail({
   if (!result.ok) {
     console.error("[email] Verification email failed", {
       ...getEmailDiagnostics(),
+      actualProvider: result.provider,
       reason: result.reason,
       error: result.error ?? null,
     });
     return { ok: false, reason: result.reason, provider: result.provider, error: result.error };
   }
 
-  console.info("[email] Verification email sent successfully", {
+  console.info("[email] Verification email accepted by provider", {
     ...getEmailDiagnostics(),
+    actualProvider: result.provider,
     emailId: result.id ?? null,
   });
 
+  return { ok: true, reason: "sent", provider: result.provider, id: result.id ?? null };
+}
+
+// ---------------------------------------------------------------------------
+// AI LEAD FOLLOW-UP EMAIL (EMAIL channel)
+// ---------------------------------------------------------------------------
+
+/** Basic RFC-ish address check for untrusted recipient input (lead records).
+ *  Deliberately conservative: one @, no whitespace/angle brackets, dotted
+ *  domain. Used to refuse obviously malformed lead emails before sending. */
+export function isValidEmailAddress(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (trimmed.length < 6 || trimmed.length > 254) return false;
+  return /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]{2,}$/.test(trimmed);
+}
+
+/** Escape text for safe interpolation into HTML email bodies. Any value that
+ *  originates outside our codebase (lead names, org names, AI-generated
+ *  drafts) MUST pass through this before appearing in HTML. */
+export function escapeEmailHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/** Strip CR/LF so untrusted display names can never inject extra headers
+ *  (Subject/To) through nodemailer or the Resend payload. */
+function sanitizeHeaderValue(value: string): string {
+  return value.replace(/[\r\n]+/g, " ").trim();
+}
+
+export interface SendLeadFollowUpEmailInput {
+  to: string;
+  /** Lead's first name (or full name) — HTML-escaped in the template. */
+  leadName?: string | null;
+  /** Organization display name — HTML-escaped in the template. */
+  organizationName?: string | null;
+  /** The AI-drafted follow-up message. HTML-escaped in the template. */
+  message: string;
+}
+
+/**
+ * Sends an AI-drafted lead follow-up over the EMAIL channel through the same
+ * single delivery path (deliverEmail) as the transactional senders, so SMTP /
+ * Resend selection, timeouts, and error classification behave identically.
+ *
+ * Honesty rules honored here:
+ *  - ok:true means the PROVIDER ACCEPTED the message, never "delivered".
+ *  - ok:false carries a stable machine reason; callers must not advance the
+ *    follow-up schedule on a failure.
+ *  - The raw AI draft is never logged (it can contain customer content).
+ */
+export async function sendLeadFollowUpEmail(input: SendLeadFollowUpEmailInput): Promise<DeliverEmailResult> {
+  const to = input.to.trim();
+  if (!isValidEmailAddress(to)) {
+    return { ok: false, reason: "invalid_recipient", provider: activeProviderForMetadata() };
+  }
+  if (getActiveEmailProvider() === "none") {
+    console.warn("[email] Lead follow-up requested but no email provider is configured.", {
+      ...getEmailDiagnostics(),
+      reason: "missing_api_key",
+    });
+    return { ok: false, reason: "missing_api_key", provider: "resend" };
+  }
+  if (!assertEmailUrlSafe()) {
+    console.error("[email] Refusing to send: APP_URL is not a public HTTPS origin in production.", {
+      ...getEmailDiagnostics(),
+      reason: "unsafe_app_url",
+    });
+    return { ok: false, reason: "unsafe_app_url", provider: activeProviderForMetadata() };
+  }
+  const from = getActiveEmailProvider() === "smtp" ? (getSmtpConfig()?.from ?? "") : getBrevoFromAddress();
+  if (!isValidSenderAddress(from)) {
+    console.error("[email] Refusing to send: sender address is malformed.", {
+      ...getEmailDiagnostics(),
+      reason: "invalid_sender",
+    });
+    return { ok: false, reason: "invalid_sender", provider: activeProviderForMetadata() };
+  }
+
+  // Bound the draft length: an unexpectedly huge AI output must never become
+  // a huge email. Truncation is by characters after escaping-safe trimming.
+  const boundedMessage = input.message.trim().slice(0, 2000);
+  const leadName = sanitizeHeaderValue((input.leadName?.trim() || "there").slice(0, 120));
+  const orgName = sanitizeHeaderValue(input.organizationName?.trim() || "Basera").slice(0, 120);
+
+  const escMessage = escapeEmailHtml(boundedMessage)
+    .replace(/\n/g, "<br />");
+  const subject = sanitizeHeaderValue(`Following up from ${orgName}`);
+
+  const html = `
+    <div style="font-family:Arial,Helvetica,sans-serif; background:#f5f7f8; padding:32px 16px; color:#102b3d;">
+      <div style="max-width:560px; margin:0px auto; background:#ffffff; border:1px solid #e4edf0; border-radius:18px; overflow:hidden;">
+        <div style="background:linear-gradient(135deg,#102b3d,#163b4d); padding:24px 28px;">
+          <div style="font-size:26px; font-weight:700; color:#ffffff; letter-spacing:0.04em;">Basera</div>
+        </div>
+        <div style="padding:30px 28px 24px;">
+          <p style="margin:0 0 18px; font-size:16px; line-height:1.6; color:#344a5b;">
+            Hi ${escapeEmailHtml(leadName)},<br /><br />
+            ${escMessage}
+          </p>
+          <p style="margin:0; font-size:13px; line-height:1.6; color:#5b7182;">
+            — The team at ${escapeEmailHtml(orgName)}
+          </p>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const text = `Hi ${leadName},\n\n${boundedMessage}\n\n— The team at ${orgName}`;
+
+  const result = await deliverEmail({ to, subject, html, text });
+
+  if (!result.ok) {
+    // Log the stable reason + provider only — never the draft or recipient.
+    console.error("[email] Lead follow-up email failed", {
+      ...getEmailDiagnostics(),
+      actualProvider: result.provider,
+      reason: result.reason,
+    });
+    return { ok: false, reason: result.reason, provider: result.provider, error: result.error };
+  }
+
+  console.info("[email] Lead follow-up email accepted by provider", {
+    ...getEmailDiagnostics(),
+    actualProvider: result.provider,
+    emailId: result.id ?? null,
+  });
   return { ok: true, reason: "sent", provider: result.provider, id: result.id ?? null };
 }

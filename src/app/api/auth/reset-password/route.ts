@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, gte, isNull } from "drizzle-orm";
 import { db } from "@/db/client";
 import { passwordResetTokens, users } from "@/db/schema";
 import { validatePasswordResetInput } from "@/lib/validation";
 import { getClientIp, rateLimitedResponse, resetIpLimiter, resetTokenLimiter } from "@/lib/rate-limit";
-import { VERIFY_TOKEN_PREFIX } from "@/lib/email-verification";
+import { VERIFY_TOKEN_PREFIX, deleteExpiredPasswordResetTokens } from "@/lib/email-verification";
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
@@ -31,12 +31,23 @@ export async function POST(req: NextRequest) {
   if (!ipCheck.allowed) return rateLimitedResponse(ipCheck.retryAfterMs);
   if (!tokenCheck.allowed) return rateLimitedResponse(tokenCheck.retryAfterMs);
 
-  const resetRows = await db.select().from(passwordResetTokens);
+  // Opportunistic hygiene: expired rows can never match, so dropping them
+  // keeps the token table (and every future scan) bounded.
+  await deleteExpiredPasswordResetTokens();
+
+  // Narrow the candidate set IN SQL to unused, unexpired rows (indexed
+  // predicates) so each attempt runs a bounded number of bcrypt compares
+  // instead of scanning the whole table. ISO-text expires_at compares
+  // lexicographically, which matches chronological order.
+  const nowIso = new Date().toISOString();
+  const resetRows = await db
+    .select()
+    .from(passwordResetTokens)
+    .where(and(isNull(passwordResetTokens.usedAt), gte(passwordResetTokens.expiresAt, nowIso)));
   const now = new Date();
 
   let matchingToken: (typeof passwordResetTokens.$inferSelect) | null = null;
   for (const row of resetRows) {
-    if (row.usedAt) continue;
     if (new Date(row.expiresAt).getTime() <= now.getTime()) continue;
 
     const isValid = await bcrypt.compare(rawToken, row.tokenHash);

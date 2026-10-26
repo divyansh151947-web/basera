@@ -157,6 +157,46 @@ describe("SMTP delivery (mocked transport, no real sends)", () => {
     expect(JSON.stringify(result)).not.toContain("app-password-xyz");
   });
 
+  it("falls back to Resend when SMTP fails and Resend is configured", async () => {
+    setSmtpEnv();
+    process.env.RESEND_API_KEY = "re_fallback_test";
+    vi.stubEnv("NODE_ENV", "development");
+    process.env.APP_URL = "http://localhost:4100";
+
+    // First SMTP attempt fails
+    sendMailMock.mockRejectedValueOnce(new Error("socket hang up"));
+
+    // Resend stub
+    const requests: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: any) => {
+        requests.push(JSON.parse(init.body));
+        return {
+          ok: true,
+          status: 200,
+          headers: { entries: () => [] as Array<[string, string]> },
+          text: async () => "",
+          json: async () => ({ id: "re_fallback_1" }),
+        };
+      })
+    );
+
+    try {
+      const result = await sendVerificationEmail({ to: "fallback@example.com", token: "verify_fallback" });
+      expect(result.ok).toBe(true);
+      expect(result.provider).toBe("resend");
+      expect(result.id).toBe("re_fallback_1");
+      // SMTP was attempted first
+      expect(nodemailer.createTransport).toHaveBeenCalled();
+      // Then Resend was called
+      expect(requests.length).toBe(1);
+      expect((requests[0] as any).to).toEqual(["fallback@example.com"]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("resend remains the fallback with no SMTP configured", async () => {
     process.env.RESEND_API_KEY = "re_x";
     vi.stubEnv("NODE_ENV", "development");
@@ -193,5 +233,62 @@ describe("SMTP delivery (mocked transport, no real sends)", () => {
       await sendVerificationEmail({ to, token: "verify_q" });
       expect(sendMailMock.mock.calls[0][0].to).toBe(to);
     }
+  });
+});
+
+describe("production URL-guard refusals are honest and self-diagnosing (no sends)", () => {
+  it("verification: refuses localhost APP_URL, reports the REAL provider, logs the failing origin", async () => {
+    setSmtpEnv();
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("APP_URL", "http://localhost:3000");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await sendVerificationEmail({ to: "newuser@example.com", token: "verify_secret_token" });
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe("unsafe_app_url");
+      // Honest provider metadata: SMTP was the active provider, so a refusal
+      // must never claim "resend" (that misdirected real debugging before).
+      expect(result.provider).toBe("smtp");
+      // Nothing was sent.
+      expect(sendMailMock).not.toHaveBeenCalled();
+      // The refusal log shows WHICH origin failed and which provider would
+      // have sent, so server logs alone are enough to diagnose.
+      const logged = errorSpy.mock.calls.map((call) => JSON.stringify(call[1] ?? {})).join("\n");
+      expect(logged).toContain("unsafe_app_url");
+      expect(logged).toContain("http://localhost:3000");
+      expect(logged).toContain('"appOriginPublic":false');
+      expect(logged).toContain('"emailProvider":"smtp"');
+      // ...but never the token or the SMTP password.
+      expect(logged).not.toContain("verify_secret_token");
+      expect(logged).not.toContain("app-password-xyz");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("password reset: same refusal with honest provider metadata", async () => {
+    setSmtpEnv();
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("APP_URL", "http://localhost:3000");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await sendPasswordResetEmail({ to: "u@example.com", token: "tok_reset" });
+      expect(result).toMatchObject({ ok: false, reason: "unsafe_app_url", provider: "smtp" });
+      expect(sendMailMock).not.toHaveBeenCalled();
+      const logged = errorSpy.mock.calls.map((call) => JSON.stringify(call[1] ?? {})).join("\n");
+      expect(logged).not.toContain("tok_reset");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("resend-only production refusal still reports resend", async () => {
+    clearSmtpEnv();
+    process.env.RESEND_API_KEY = "re_x";
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("APP_URL", "http://localhost:3000");
+    const result = await sendVerificationEmail({ to: "u@example.com", token: "v" });
+    expect(result).toMatchObject({ ok: false, reason: "unsafe_app_url", provider: "resend" });
+    expect(nodemailer.createTransport).not.toHaveBeenCalled();
   });
 });

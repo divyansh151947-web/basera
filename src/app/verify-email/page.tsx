@@ -30,8 +30,17 @@ function VerifyEmailForm() {
       body: JSON.stringify({ token }),
     })
       .then(async (res) => {
-        if (!res.ok) throw new Error();
-        setState("done");
+        const data = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
+        if (res.ok) {
+          setState("done");
+          return;
+        }
+        if (res.status === 409 && data.code === "ALREADY_VERIFIED") {
+          // This exact link was already used: the address is verified.
+          setState("done");
+          return;
+        }
+        throw new Error();
       })
       .catch(() => {
         setState("error");
@@ -59,7 +68,18 @@ function VerifyEmailForm() {
               </Link>
             </>
           )}
-          {state === "error" && <p className="mt-2 text-sm font-medium text-danger">{error}</p>}
+          {state === "error" && (
+            <>
+              <p className="mt-2 text-sm font-medium text-danger">{error}</p>
+              <p className="mt-3 text-sm text-slate">
+                Verification links expire after 24 hours and can be used once.{" "}
+                <Link href="/login" className="font-medium text-brand hover:underline">
+                  Sign in
+                </Link>{" "}
+                and choose &ldquo;resend verification email&rdquo; to get a fresh link.
+              </p>
+            </>
+          )}
         </div>
       </div>
     </div>

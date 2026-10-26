@@ -23,7 +23,7 @@ import { resolvePublicChatOrgSlug } from "@/lib/public-chat";
  * This endpoint answers the configuration questions WITHOUT ever exposing
  * secrets, tokens, URLs, or emails:
  *
- *  - which email provider is actually selected (smtp > resend > none) and
+ *  - which email provider is actually selected (smtp > brevo > resend > none) and
  *    the sender domain it would send from;
  *  - whether APP_URL/NEXTAUTH_URL is configured and passes the public-HTTPS
  *    guard that verification/reset links are generated from;

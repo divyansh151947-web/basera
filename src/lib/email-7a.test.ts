@@ -240,6 +240,7 @@ describe("password reset email content and diagnostics", () => {
     expect(d).toEqual({
       emailProvider: "resend",
       apiKeyConfigured: true,
+      brevoConfigured: false,
       smtpConfigured: false,
       sender: "Basera <no-reply@basera.com>",
       senderDomain: "basera.com",

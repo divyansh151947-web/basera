@@ -96,7 +96,17 @@ describe("M-2: verification token lifecycle (real code + real DB shape)", () => 
     const { rawToken } = await createEmailVerification(tempUserId);
     expect((await verifyPOST(post("/api/auth/verify-email", { token: rawToken }))).status).toBe(200);
     const again = await verifyPOST(post("/api/auth/verify-email", { token: rawToken }));
-    expect(again.status).toBe(400);
+    // Replay is refused: the token holder gets the explicit already-verified
+    // state (409 ALREADY_VERIFIED) — never a second consume — and everyone
+    // else (wrong/garbage tokens) still gets the generic 400 below.
+    expect(again.status).toBe(409);
+    expect(await again.json()).toEqual({
+      error: "This email address has already been verified. You can sign in.",
+      code: "ALREADY_VERIFIED",
+    });
+    // And the verified stamp is unchanged (idempotent, single consume).
+    const [user] = await db.select().from(users).where(eq(users.id, tempUserId)).limit(1);
+    expect(user.emailVerifiedAt).toBeTruthy();
   }, 30000);
 
   it("expired and invalid tokens fail safely with generic errors", async () => {

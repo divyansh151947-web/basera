@@ -120,7 +120,18 @@ function ResetPasswordForm() {
             </div>
           </div>
 
-          {error && <p className="text-sm font-medium text-danger">{error}</p>}
+          {error && (
+            <>
+              <p className="text-sm font-medium text-danger">{error}</p>
+              <p className="text-sm text-slate">
+                Reset links expire after 1 hour and can be used once.{" "}
+                <Link href="/forgot-password" className="font-medium text-brand hover:underline">
+                  Request a new link
+                </Link>
+                .
+              </p>
+            </>
+          )}
           {success && <p className="rounded-xl border border-success/20 bg-success-soft px-3 py-2.5 text-sm text-success">{success}</p>}
 
           <button type="submit" disabled={loading || !token} className="primary-btn w-full">

@@ -7,6 +7,7 @@ import { passwordResetTokens, users } from "@/db/schema";
 import { sendPasswordResetEmail } from "@/lib/email";
 import { normalizeEmail, validateForgotPasswordInput } from "@/lib/validation";
 import { forgotEmailLimiter, forgotIpLimiter, getClientIp, rateLimitedResponse } from "@/lib/rate-limit";
+import { deleteExpiredPasswordResetTokens } from "@/lib/email-verification";
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
@@ -38,6 +39,10 @@ export async function POST(req: NextRequest) {
   const tokenHash = await bcrypt.hash(rawToken, 12);
   const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 
+  // Opportunistic hygiene: expired rows can never match, so dropping them
+  // keeps the token table (and every future scan) bounded.
+  await deleteExpiredPasswordResetTokens();
+
   await db.delete(passwordResetTokens).where(eq(passwordResetTokens.userId, user.id));
   await db.insert(passwordResetTokens).values({
     userId: user.id,
@@ -52,7 +57,9 @@ export async function POST(req: NextRequest) {
   });
 
   if (emailResult.ok) {
-    console.info("[auth] Password reset email request accepted and delivered.", {
+    // "Accepted by provider" is the strongest honest claim here: delivery
+    // to the inbox is asynchronous and provider-confirmed, never assumed.
+    console.info("[auth] Password reset email accepted by provider.", {
       userId: user.id,
       emailId: emailResult.id ?? null,
     });
