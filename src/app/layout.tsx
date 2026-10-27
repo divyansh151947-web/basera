@@ -2,6 +2,10 @@ import type { Metadata, Viewport } from "next";
 import { Inter, Fraunces } from "next/font/google";
 import "./globals.css";
 import Providers from "@/components/providers";
+// Vercel Web Analytics — cookie-free, privacy-friendly page-view tracking.
+// The /next entry auto-tracks App Router route changes; no env vars needed
+// (events appear in the Vercel dashboard once the project is deployed).
+import { Analytics } from "@vercel/analytics/next";
 import {
   DEFAULT_DESCRIPTION,
   DEFAULT_TITLE,
@@ -137,6 +141,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" className={`${inter.variable} ${fraunces.variable}`}>
       <body>
         <Providers>{children}</Providers>
+        <Analytics />
       </body>
     </html>
   );
