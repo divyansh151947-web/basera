@@ -47,3 +47,5 @@ export const buyerPreferences = active.buyerPreferences;
 export const twoFactorCredentials = active.twoFactorCredentials;
 export const twoFactorChallenges = active.twoFactorChallenges;
 export const twoFactorRecoveryCodes = active.twoFactorRecoveryCodes;
+export const workflowDefinitions = active.workflowDefinitions;
+export const workflowExecutions = active.workflowExecutions;
