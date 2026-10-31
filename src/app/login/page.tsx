@@ -269,7 +269,7 @@ export default function StaffLoginPage() {
 
           <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-white/65">
             <p className="font-semibold text-white">Demo access</p>
-            <p className="mt-1">admin@urbannest.demo / demo1234</p>
+            <p className="mt-1">Demo credentials are not displayed here. Use your invited staff email or contact your workspace administrator.</p>
           </div>
 
           <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-white/65">

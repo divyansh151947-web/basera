@@ -2,9 +2,11 @@ import { getCurrentSession } from "@/lib/auth";
 import { canManageAllLeads } from "@/lib/lead-access";
 import { getTenantAnalyticsSnapshot } from "@/lib/data/analytics";
 import { leadsOverTime } from "@/lib/data/leads";
+import { calculateForecast } from "@/lib/forecasting";
 import { FunnelChart, TrendChart, SourcePie, TemperatureBar } from "@/components/charts";
 import { ArrowUpRight, CalendarClock, TrendingUp, Users, Flame, Target } from "lucide-react";
 import { PilotSummary } from "./pilot-summary";
+import { formatInr } from "@/lib/formatters";
 
 export default async function AnalyticsPage() {
   const session = await getCurrentSession();
@@ -16,9 +18,12 @@ export default async function AnalyticsPage() {
     throw new Error("No organization on this account");
   }
 
-  const [analytics, overTime] = await Promise.all([
+  const [analytics, overTime, forecast] = await Promise.all([
     getTenantAnalyticsSnapshot(organizationId),
     leadsOverTime(organizationId, 30),
+    calculateForecast(organizationId, {
+      assignedAgentId: canManageAllLeads(role) ? undefined : userId,
+    }),
   ]);
 
   return (
@@ -45,6 +50,32 @@ export default async function AnalyticsPage() {
           <p className="mt-3 text-3xl font-semibold text-ink">{analytics.siteVisits}</p>
         </div>
       </div>
+
+      {/* Forecast pipeline summary — weighted pipeline, never presented as confirmed revenue. */}
+      <div className="grid gap-5 md:grid-cols-4">
+        <div className="panel-surface p-5">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate">Pipeline value</p>
+          <p className="mt-3 text-3xl font-semibold text-ink">{formatInr(forecast.pipelineValue)}</p>
+        </div>
+        <div className="panel-surface p-5">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate">Weighted pipeline</p>
+          <p className="mt-3 text-3xl font-semibold text-brand">{formatInr(forecast.weightedPipelineValue)}</p>
+        </div>
+        <div className="panel-surface p-5">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate">Expected revenue</p>
+          <p className="mt-3 text-3xl font-semibold text-ink">{formatInr(forecast.expectedRevenue)}</p>
+        </div>
+        <div className="panel-surface p-5">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate">Forecast confidence</p>
+          <p className="mt-3 text-3xl font-semibold text-ink">
+            {forecast.forecastConfidence}
+            {forecast.hasSufficientHistory ? null : " — limited history"}
+          </p>
+        </div>
+      </div>
+      <p className="text-xs text-slate2 max-w-2xl">
+        {forecast.honestyNote}
+      </p>
 
       <PilotSummary
         organizationId={organizationId}

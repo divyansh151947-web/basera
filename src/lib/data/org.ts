@@ -2,6 +2,7 @@ import "server-only";
 import { db } from "@/db/client";
 import {
   appointments,
+  auditLogs,
   followUps,
   organizations,
   notifications,
@@ -161,4 +162,22 @@ export async function upsertScoringConfig(organizationId: string, data: Partial<
 // ---------------- Users (team) ----------------
 export async function listTeam(organizationId: string) {
   return db.select().from(users).where(eq(users.organizationId, organizationId));
+}
+
+// ---------------- Audit logs ----------------
+export async function listAuditLogs(organizationId: string, limit = 50) {
+  return db
+    .select({
+      id: auditLogs.id,
+      action: auditLogs.action,
+      entityType: auditLogs.entityType,
+      entityId: auditLogs.entityId,
+      userId: auditLogs.userId,
+      metadataJson: auditLogs.metadataJson,
+      createdAt: auditLogs.createdAt,
+    })
+    .from(auditLogs)
+    .where(eq(auditLogs.organizationId, organizationId))
+    .orderBy(desc(auditLogs.createdAt))
+    .limit(limit);
 }

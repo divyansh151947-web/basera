@@ -3,13 +3,17 @@ import { getLeadById } from "@/lib/data/leads";
 import { listTeam } from "@/lib/data/org";
 import { db } from "@/db/client";
 import { conversations, messages } from "@/db/schema";
-import { eq, desc } from "drizzle-orm";
+import { eq, inArray, desc, asc } from "drizzle-orm";
 import { matchProperties } from "@/lib/ai/property-matching";
 import { getRecoveryTimeline } from "@/lib/revenue-recovery-autopilot";
 import { TempBadge, StatusBadge } from "@/components/ui";
 import { formatBudgetRange } from "@/lib/formatters";
 import { notFound, redirect } from "next/navigation";
 import LeadControls from "./lead-controls";
+import { getScoringConfig } from "@/lib/data/org";
+import { listLeadInterests } from "@/lib/data/leads";
+import { scoreLead, buildScoringInputs } from "@/lib/ai/lead-scoring";
+import { DEFAULT_WEIGHTS, DEFAULT_THRESHOLDS } from "@/lib/ai/lead-scoring";
 
 export default async function LeadDetailPage({ params }: { params: { id: string } }) {
   const session = await getCurrentSession();
@@ -18,13 +22,55 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
   const lead = await getLeadById(organizationId, params.id);
   if (!lead) notFound();
 
-  const [team, matches, convo, timeline] = await Promise.all([
+  const [team, matches, convo, timeline, scoringConfig, leadInterests] = await Promise.all([
     listTeam(organizationId),
     matchProperties(organizationId, lead, 5),
     db.select().from(conversations).where(eq(conversations.leadId, lead.id)).orderBy(desc(conversations.updatedAt)).limit(1),
     getRecoveryTimeline(organizationId, lead.id),
+    getScoringConfig(organizationId),
+    listLeadInterests(organizationId, lead.id),
   ]);
   const assignedAgent = team.find((m) => m.id === lead.assignedAgentId);
+
+  // Score breakdown: recomputed from persisted state so the "why" matches the
+  // stored score exactly. Read-only here; writes happen via rescore.
+  const conversationIds = convo.map((c) => c.id);
+  const messageRows =
+    conversationIds.length > 0
+      ? await db
+          .select({ sender: messages.sender, createdAt: messages.createdAt })
+          .from(messages)
+          .where(inArray(messages.conversationId, conversationIds))
+          .orderBy(asc(messages.createdAt))
+      : [];
+  const hasPropertyMatch = leadInterests.some((i) => i.matchType === "EXACT" || i.matchType === "CLOSE");
+  const scoreInputs = buildScoringInputs({
+    budgetMinInr: lead.budgetMinInr,
+    budgetMaxInr: lead.budgetMaxInr,
+    preferredCity: lead.preferredCity,
+    bhk: lead.bhk,
+    propertyType: lead.propertyType,
+    timeline: lead.timeline,
+    siteVisitInterest: lead.siteVisitInterest,
+    loanRequired: lead.loanRequired,
+    leadMessageCount: messageRows.filter((m) => m.sender === "LEAD").length,
+    hasPropertyMatch,
+    messages: messageRows.map((m) => ({ sender: m.sender, createdAt: m.createdAt })),
+  });
+  const weights =
+    scoringConfig?.weightsJson
+      ? (() => {
+          try {
+            return { ...DEFAULT_WEIGHTS, ...JSON.parse(scoringConfig.weightsJson) };
+          } catch {
+            return DEFAULT_WEIGHTS;
+          }
+        })()
+      : DEFAULT_WEIGHTS;
+  const thresholds = scoringConfig
+    ? { hot: scoringConfig.hotThreshold, warm: scoringConfig.warmThreshold }
+    : DEFAULT_THRESHOLDS;
+  const scoreBreakdown = scoreLead(scoreInputs, weights, thresholds);
 
   const msgs = convo[0] ? await db.select().from(messages).where(eq(messages.conversationId, convo[0].id)) : [];
 
@@ -115,6 +161,34 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
               <Row label="Next follow-up" value={lead.nextFollowUpAt ? new Date(lead.nextFollowUpAt).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : "—"} />
               <Row label="Status" value={lead.status.replace(/_/g, " ").toLowerCase()} />
             </dl>
+          </div>
+          <div className="rounded-lg border border-line bg-panel p-4 text-sm">
+            <h2 className="text-sm font-semibold text-ink mb-2">Score breakdown</h2>
+            <p className="text-xs text-slate2 mb-3">Transparent, reproducible scoring — every point names the factor that earned it.</p>
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-slate2">Score</span>
+                <span className="font-semibold text-ink">{scoreBreakdown.score}/100</span>
+                <span className="text-xs rounded-full px-2 py-0.5 bg-brand-soft text-brand">{scoreBreakdown.temperature}</span>
+              </div>
+              {scoreBreakdown.breakdown.map((b) => (
+                <div key={b.factor} className="flex items-center justify-between text-xs mb-0.5">
+                  <span className="text-slate2">{b.factor}</span>
+                  <span className="font-medium text-right text-ink">{b.points}/{b.max}</span>
+                </div>
+              ))}
+              <div className="mt-2 border-t border-line pt-2">
+                <p className="text-xs text-slate2">Missing information that would raise the score:</p>
+                <p className="text-xs text-slate2 italic">
+                  {!scoreInputs.hasBudget && "budget · "}
+                  {!scoreInputs.hasLocation && "location · "}
+                  {!scoreInputs.hasBhkOrType && "property type/BHK · "}
+                  {scoreInputs.timelineWithinDays == null && "timeline · "}
+                  {!scoreInputs.hasPropertyMatch && "matching property"}
+                  {"."}
+                </p>
+              </div>
+            </div>
           </div>
           <div className="rounded-lg border border-line bg-panel p-4 text-sm">
             <h2 className="text-sm font-semibold text-ink mb-2">Recovery timeline</h2>
