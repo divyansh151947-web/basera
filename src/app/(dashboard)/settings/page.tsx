@@ -1,6 +1,8 @@
 import WhatsAppIntegration from "./whatsapp-integration";
 import { OrganizationForm, AIConfigForm } from "./settings-forms";
 import { PilotReadiness } from "./pilot-readiness";
+import AuditLogs from "./audit-logs";
+import Workflows from "./workflows";
 import { getCurrentSession } from "@/lib/auth";
 
 export default async function SettingsPage() {
@@ -20,6 +22,8 @@ export default async function SettingsPage() {
       </div>
       <WhatsAppIntegration />
       {organizationId && <PilotReadiness organizationId={organizationId} />}
+      <AuditLogs />
+      <Workflows />
     </div>
   );
 }

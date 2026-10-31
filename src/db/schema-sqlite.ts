@@ -611,3 +611,38 @@ export const buyerPreferences = sqliteTable("buyer_preferences", {
 }, (t) => ({
   userIdx: uniqueIndex("bp_user_idx").on(t.userId),
 }));
+
+// -----------------------------
+// AUTOMATED SALES WORKFLOWS
+// -----------------------------
+
+export const workflowDefinitions = sqliteTable("workflow_definitions", {
+  id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  isEnabled: integer("is_enabled", { mode: "boolean" }).notNull().default(true),
+  triggersJson: text("triggers_json").notNull().default("[]"),
+  conditionsJson: text("conditions_json").notNull().default("{}"),
+  actionsJson: text("actions_json").notNull().default("[]"),
+  ...timestamps,
+}, (t) => ({
+  orgIdx: index("wfdef_org_idx").on(t.organizationId),
+  enabledIdx: index("wfdef_org_enabled_idx").on(t.organizationId, t.isEnabled),
+  uniqueOrgName: uniqueIndex("wfdef_org_name_idx").on(t.organizationId, t.name),
+}));
+
+export const workflowExecutions = sqliteTable("workflow_executions", {
+  id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  workflowDefinitionId: text("workflow_definition_id").notNull().references(() => workflowDefinitions.id, { onDelete: "cascade" }),
+  leadId: text("lead_id").references(() => leads.id, { onDelete: "set null" }),
+  status: text("status", { enum: ["PENDING", "COMPLETED", "FAILED", "SKIPPED"] }).notNull().default("PENDING"),
+  triggeredBy: text("triggered_by").notNull(),
+  resultSummary: text("result_summary"),
+  ...timestamps,
+}, (t) => ({
+  orgIdx: index("wfexec_org_idx").on(t.organizationId, t.createdAt),
+  defIdx: index("wfexec_def_idx").on(t.workflowDefinitionId),
+  leadIdx: index("wfexec_lead_idx").on(t.leadId),
+}));
