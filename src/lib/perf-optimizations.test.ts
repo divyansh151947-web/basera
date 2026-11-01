@@ -134,14 +134,20 @@ describe("perf optimizations (isolated db)", () => {
     expect(chartWrapper).toMatch(/dynamic\(\s*\(\)\s*=>\s*import\("\.\/PriceHistoryChart"\)/);
     const dash = fs.readFileSync("src/app/(dashboard)/dashboard/page.tsx", "utf8");
     expect(dash).toMatch(/RevenueTower/);
-    expect(dash).toMatch(/dynamic/);
-    expect(dash).not.toMatch(/import \{ RevenueTower \} from "@\/components\/property-tour\/RevenueTower"/);
+    expect(dash).toMatch(/DashboardRevenueTower/);
+    const dashboardVisuals = fs.readFileSync("src/components/dashboard/DashboardVisuals.tsx", "utf8");
+    expect(dashboardVisuals).toMatch(/^"use client";/);
+    expect(dashboardVisuals).toMatch(/dynamic/);
     const tour = fs.readFileSync("src/app/tour/page.tsx", "utf8");
-    expect(tour).toMatch(/dynamic\(\(\) => import\("@\/components\/property-tour\/PropertyTour"\)/);
+    expect(tour).toMatch(/TourPropertyTour/);
+    const homeTour = fs.readFileSync("src/components/property-tour/HomePropertyTour.tsx", "utf8");
+    expect(homeTour).toMatch(/^"use client";/);
+    expect(homeTour).toMatch(/dynamic\(\(\) => import\("\.\/PropertyTour"\)/);
     const home = fs.readFileSync("src/app/page.tsx", "utf8");
     // Homepage 3D sections must stay viewport-gated so three.js (~190 KB)
     // stays out of the post-hydration critical path.
     expect(home).toMatch(/<LazySection/);
+    expect(home).toMatch(/<HomePropertyTour \/>/);
     const gallery = fs.readFileSync("src/app/(public)/explore/[id]/PropertyGallery.tsx", "utf8");
     // Fullscreen dialog image must not carry priority (only the LCP main image does).
     const dialogBlock = gallery.slice(gallery.indexOf("{isFullscreen &&"));

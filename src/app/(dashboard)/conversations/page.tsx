@@ -4,7 +4,8 @@ import { getCurrentSession } from "@/lib/auth";
 import { listConversations } from "@/lib/data/conversations";
 import { getLeadById } from "@/lib/data/leads";
 
-export default async function ConversationsPage({ searchParams }: { searchParams: { channel?: string } }) {
+export default async function ConversationsPage(props: { searchParams: Promise<{ channel?: string }> }) {
+  const searchParams = await props.searchParams;
   const session = await getCurrentSession();
   if (!session?.user) redirect("/login");
   const organizationId = (session.user as any).organizationId as string;

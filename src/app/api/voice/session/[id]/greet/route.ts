@@ -16,7 +16,8 @@ import { getClientIp, rateLimitedResponse, voiceIpDayLimiter, voiceIpMinuteLimit
  * synthesized through the SESSION's own provider (never a fallback vendor).
  * No audio is stored; the browser plays the returned bytes.
  */
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const ip = getClientIp(req.headers);
   const minuteCheck = await voiceIpMinuteLimiter.check(`voice:ip-minute:${ip}`);
   if (!minuteCheck.allowed) return rateLimitedResponse(minuteCheck.retryAfterMs);

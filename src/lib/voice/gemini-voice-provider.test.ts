@@ -162,6 +162,74 @@ describe("gemini voice provider (mocked transport — key never leaves test)", (
     expect(wav.length).toBe(44 + pcm.length);
   });
 
+  it("streams Gemini TTS PCM chunks with the configured Kore voice", async () => {
+    setKey("test-gemini-key");
+    const savedModel = process.env.GEMINI_TTS_MODEL;
+    const savedFallback = process.env.GEMINI_TTS_FALLBACK_MODELS;
+    process.env.GEMINI_TTS_MODEL = "gemini-3.8-flash-tts";
+    process.env.GEMINI_TTS_FALLBACK_MODELS = "";
+    try {
+      const pcmOne = Buffer.from([1, 2, 3, 4]).toString("base64");
+      const pcmTwo = Buffer.from([5, 6, 7, 8]).toString("base64");
+      handler = (url, init) => {
+        expect(url).toContain(":streamGenerateContent?alt=sse");
+        const body = JSON.parse(init.body as string) as { generationConfig: { speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: string } } } } };
+        expect(body.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Kore");
+        return new Response([
+          `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: "audio/L16;codec=pcm;rate=24000", data: pcmOne } }] } }] })}\n\n`,
+          `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: "audio/L16;codec=pcm;rate=24000", data: pcmTwo } }] } }] })}\n\n`,
+        ].join(""), { headers: { "content-type": "text/event-stream" } });
+      };
+      const chunks: string[] = [];
+      const result = await new GeminiVoiceProvider().synthesizeReply({
+        replyText: "Namaste!",
+        language: "en",
+        conversationId: "c",
+        onAudioChunk: (base64) => { chunks.push(base64); },
+      });
+      expect(chunks).toEqual([pcmOne, pcmTwo]);
+      expect(result.audioBase64).toBeNull();
+      expect(result.providerMetadata).toMatchObject({ streamed: true, chunks: 2, voice: "Kore" });
+    } finally {
+      if (savedModel === undefined) delete process.env.GEMINI_TTS_MODEL;
+      else process.env.GEMINI_TTS_MODEL = savedModel;
+      if (savedFallback === undefined) delete process.env.GEMINI_TTS_FALLBACK_MODELS;
+      else process.env.GEMINI_TTS_FALLBACK_MODELS = savedFallback;
+    }
+  });
+
+  it("does not start a fallback voice after a partial streamed TTS response", async () => {
+    setKey("test-gemini-key");
+    const savedModel = process.env.GEMINI_TTS_MODEL;
+    const savedFallback = process.env.GEMINI_TTS_FALLBACK_MODELS;
+    process.env.GEMINI_TTS_MODEL = "gemini-3.8-flash-tts";
+    process.env.GEMINI_TTS_FALLBACK_MODELS = "gemini-3.1-flash-tts-preview";
+    try {
+      const chunk = Buffer.from([1, 2, 3, 4]).toString("base64");
+      handler = () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: "audio/L16;rate=24000", data: chunk } }] } }] })}\n\n`));
+          setTimeout(() => controller.error(new Error("temporarily unavailable")), 0);
+        },
+      }), { headers: { "content-type": "text/event-stream" } });
+      const provider = new GeminiVoiceProvider();
+      const received: string[] = [];
+      await expect(provider.synthesizeReply({
+        replyText: "A complete reply.",
+        language: "en",
+        conversationId: "c",
+        onAudioChunk: (base64) => { received.push(base64); },
+      })).rejects.toThrow(/temporarily unavailable/i);
+      expect(received).toEqual([chunk]);
+      expect(calls).toHaveLength(1);
+    } finally {
+      if (savedModel === undefined) delete process.env.GEMINI_TTS_MODEL;
+      else process.env.GEMINI_TTS_MODEL = savedModel;
+      if (savedFallback === undefined) delete process.env.GEMINI_TTS_FALLBACK_MODELS;
+      else process.env.GEMINI_TTS_FALLBACK_MODELS = savedFallback;
+    }
+  });
+
   it("text-instead-of-audio TTS response fails explicitly (no fake silence)", async () => {
     setKey("test-gemini-key");
     handler = () => sttResponse("hello (text, not audio)");

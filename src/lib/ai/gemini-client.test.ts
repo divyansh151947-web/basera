@@ -7,6 +7,7 @@ import { callGemini, geminiAiIsConfigured } from "./gemini-client";
 const SAVED_KEY = process.env.GEMINI_API_KEY;
 const SAVED_MODEL = process.env.GEMINI_CHAT_MODEL;
 const SAVED_FALLBACKS = process.env.GEMINI_CHAT_FALLBACK_MODELS;
+const SAVED_VOICE_MODEL = process.env.GEMINI_VOICE_CHAT_MODEL;
 
 type Handler = (model: string) => Response;
 
@@ -55,6 +56,7 @@ afterEach(() => {
   setEnv("GEMINI_API_KEY", SAVED_KEY);
   setEnv("GEMINI_CHAT_MODEL", SAVED_MODEL);
   setEnv("GEMINI_CHAT_FALLBACK_MODELS", SAVED_FALLBACKS);
+  setEnv("GEMINI_VOICE_CHAT_MODEL", SAVED_VOICE_MODEL);
 });
 
 describe("callGemini model chain (mocked transport — key never leaves test)", () => {
@@ -124,5 +126,17 @@ describe("callGemini model chain (mocked transport — key never leaves test)", 
     const result = await callGemini({ system: "s", messages: [{ role: "user", content: "hi" }] });
     expect(result.text).toBe("custom chain");
     expect(calls).toEqual(["gemini-3.8-flash", "gemini-3.6-flash"]);
+  });
+
+  it("prioritizes the proven Flash-Lite fallback only for voice requests", async () => {
+    setEnv("GEMINI_CHAT_MODEL", "gemini-3.8-flash");
+    setEnv("GEMINI_CHAT_FALLBACK_MODELS", "gemini-3.5-flash");
+    setEnv("GEMINI_VOICE_CHAT_MODEL", undefined);
+    handler = () => ok("voice answer");
+    await callGemini({ system: "s", messages: [{ role: "user", content: "hi" }] }, { requestPolicy: "voice" });
+    expect(calls).toEqual(["gemini-3.5-flash-lite"]);
+    calls = [];
+    await callGemini({ system: "s", messages: [{ role: "user", content: "hi" }] });
+    expect(calls).toEqual(["gemini-3.8-flash"]);
   });
 });

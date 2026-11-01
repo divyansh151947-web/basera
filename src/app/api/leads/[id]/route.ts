@@ -7,7 +7,8 @@ import { getClientIp, rateLimitedResponse, staffApiLimiter } from "@/lib/rate-li
 import { stopFollowUps } from "@/lib/ai/followup-agent";
 import { rescoreLead } from "@/lib/ai/rescore";
 
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const { organizationId, role, userId } = await requireTenant();
     const rl = await staffApiLimiter.check(`staff-api:${userId}:${getClientIp(req.headers)}`);
@@ -21,7 +22,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   }
 }
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const { organizationId, role, userId } = await requireTenant();
     const rl = await staffApiLimiter.check(`staff-api:${userId}:${getClientIp(req.headers)}`);

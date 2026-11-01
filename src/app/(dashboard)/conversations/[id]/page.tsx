@@ -7,7 +7,8 @@ import { matchProperties } from "@/lib/ai/property-matching";
 import { formatBudgetRange } from "@/lib/formatters";
 import { TempBadge, StatusBadge } from "@/components/ui";
 
-export default async function ConversationDetailPage({ params }: { params: { id: string } }) {
+export default async function ConversationDetailPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const session = await getCurrentSession();
   if (!session?.user) redirect("/login");
   const organizationId = (session.user as any).organizationId as string;

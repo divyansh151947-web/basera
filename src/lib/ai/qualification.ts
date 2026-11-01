@@ -752,7 +752,15 @@ function coerceBool(value: unknown): boolean | undefined {
   return undefined;
 }
 
-export async function extractRequirements(message: string): Promise<ExtractedRequirements> {
+export async function extractRequirements(message: string, options?: { voiceLatencyMode?: boolean }): Promise<ExtractedRequirements> {
+  if (options?.voiceLatencyMode) {
+    const quick = sanitizeExtractedRequirements(ruleBasedExtract(message));
+    // Requirement extraction is already backed by this deterministic parser
+    // when the model is unavailable. Use it for recognized spoken fields so
+    // a normal voice turn avoids an extra serial Gemini request; retain the
+    // model path for unfamiliar text where the parser found nothing.
+    if (Object.keys(quick).length > 0) return quick;
+  }
   if (!aiIsConfigured()) return sanitizeExtractedRequirements(ruleBasedExtract(message));
 
   try {
@@ -760,7 +768,7 @@ export async function extractRequirements(message: string): Promise<ExtractedReq
       system: EXTRACTION_SYSTEM,
       messages: [{ role: "user", content: message }],
       maxTokens: 300,
-    });
+    }, options?.voiceLatencyMode ? { requestPolicy: "voice" } : undefined);
     const cleaned = text.replace(/```json|```/g, "").trim();
     return sanitizeExtractedRequirements(JSON.parse(cleaned || "{}"));
   } catch {

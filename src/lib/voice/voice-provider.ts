@@ -100,6 +100,8 @@ export interface VoiceSynthesizeInput {
   replyText: string;
   language: VoiceLanguage;
   conversationId: string;
+  /** Optional progressive audio delivery for providers that support it. */
+  onAudioChunk?: (base64: string, mimeType: string) => void | Promise<void>;
 }
 
 export interface VoiceSynthesizeResult {

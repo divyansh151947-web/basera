@@ -28,8 +28,11 @@ export function activeAIProvider(): "openai" | "anthropic" | "gemini" | "none" {
   return "none";
 }
 
-export async function callAI(params: { system: string; messages: AIMessage[]; maxTokens?: number }) {
+export async function callAI(
+  params: { system: string; messages: AIMessage[]; maxTokens?: number },
+  options?: { requestPolicy?: "voice" }
+) {
   if (openAIIsConfigured()) return callOpenAI(params);
   if (claudeIsConfigured()) return callClaude(params);
-  return callGemini(params);
+  return callGemini(params, options);
 }

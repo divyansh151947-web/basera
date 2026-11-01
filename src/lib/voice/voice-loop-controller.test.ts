@@ -29,6 +29,7 @@ class Harness {
   playEndHandlers: (() => void)[] = [];
   speakTexts: string[] = [];
   greetCalls = 0;
+  stopSpeakingCalls = 0;
   greetImpl: () => Promise<void> = async () => {
     this.greetCalls += 1;
   };
@@ -87,7 +88,7 @@ class Harness {
       speakGreeting: async () => {
         await this.greetImpl();
       },
-      stopSpeaking: () => undefined,
+      stopSpeaking: () => { this.stopSpeakingCalls += 1; },
       scheduleTick: (fn) => {
         this.tickFns.push(fn);
         return this.tickFns.length;
@@ -372,6 +373,25 @@ describe("automatic voice loop (no manual Speak step)", () => {
     expect(h.sendTurnCalls).toHaveLength(1);
     expect(h.sendTurnCalls[0].text).toBe("Hello typed");
     expect(h.replies).toHaveLength(1);
+  });
+
+  it("restores the mic after progressive reply playback has drained", async () => {
+    const h = new Harness();
+    h.sendTurnImpl = async () => ({
+      reply: "A streamed reply.",
+      replyAudioBase64: null,
+      replyAudioMimeType: null,
+      transcript: "Find a home in Jaipur.",
+      messagesDelivered: true,
+      audioAlreadyPlayed: true,
+    });
+    await h.controller.start();
+    await h.speakThenSilence(500);
+    expect(h.stopSpeakingCalls).toBe(1);
+    expect(h.controller.getState()).toBe("listening");
+    expect(h.playCalls).toHaveLength(0);
+    expect(h.transcripts).toHaveLength(0);
+    expect(h.replies).toHaveLength(0);
   });
 
   it("chat sync: voice turn shows the server-confirmed transcript exactly once (never a placeholder)", async () => {

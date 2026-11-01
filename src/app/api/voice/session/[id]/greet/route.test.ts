@@ -25,8 +25,8 @@ async function wipe() {
 
 function post(id: string) {
   return POST(new NextRequest(`http://localhost/api/voice/session/${id}/greet`, { method: "POST" }), {
-    params: { id },
-  } as unknown as { params: { id: string } });
+    params: Promise.resolve({ id }),
+  });
 }
 
 describe("POST /api/voice/session/[id]/greet", () => {

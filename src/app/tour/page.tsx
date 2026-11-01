@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import dynamic from "next/dynamic";
+import { TourPropertyTour } from "@/components/property-tour/TourPropertyTour";
 
 export const metadata: Metadata = {
   title: "Interactive 3D Property Tour",
@@ -16,21 +16,6 @@ export const metadata: Metadata = {
   },
 };
 
-/**
- * Additive cinematic tour route. The existing homepage, dashboard, and all
- * product behavior are untouched; this page stands alone.
- * The 3D world (three.js) loads client-side on demand — same tour, same
- * interactions, just out of the initial SSR bundle.
- */
-const PropertyTour = dynamic(() => import("@/components/property-tour/PropertyTour").then((m) => m.PropertyTour), {
-  ssr: false,
-  loading: () => (
-    <div className="flex min-h-[70vh] items-center justify-center" aria-busy="true">
-      <div className="h-10 w-10 animate-spin rounded-full border-2 border-[#d8a94e] border-t-transparent" />
-    </div>
-  ),
-});
-
 export default function TourPage() {
-  return <PropertyTour />;
+  return <TourPropertyTour />;
 }

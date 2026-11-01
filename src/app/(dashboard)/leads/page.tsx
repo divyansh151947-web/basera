@@ -6,7 +6,10 @@ import { formatBudgetRange } from "@/lib/formatters";
 import { TempBadge, StatusBadge } from "@/components/ui";
 import NewLeadButton from "./new-lead-button";
 
-export default async function LeadsPage({ searchParams }: { searchParams: { status?: string; temperature?: string } }) {
+export default async function LeadsPage(
+  props: { searchParams: Promise<{ status?: string; temperature?: string }> }
+) {
+  const searchParams = await props.searchParams;
   const session = await getCurrentSession();
   if (!session?.user) redirect("/login");
   const organizationId = (session.user as any).organizationId as string;

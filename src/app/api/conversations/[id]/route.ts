@@ -5,7 +5,8 @@ import { getLeadById } from "@/lib/data/leads";
 import { requireLeadAccess } from "@/lib/lead-access";
 import { getClientIp, rateLimitedResponse, staffApiLimiter } from "@/lib/rate-limit";
 
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const { organizationId, role, userId } = await requireTenant();
     const rl = await staffApiLimiter.check(`staff-api:${userId}:${getClientIp(req.headers)}`);

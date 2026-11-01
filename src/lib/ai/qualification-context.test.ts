@@ -42,6 +42,16 @@ describe("conversational tolerance (rule-based fallback, no LLM key)", () => {
     expect((await extractRequirements("I need three BHK in Jaipur")).bhk).toBe(3);
   });
 
+  it("uses the existing deterministic parser for recognized voice requirements", async () => {
+    expect(await extractRequirements("Find me a property in Jodhpur", { voiceLatencyMode: true })).toMatchObject({
+      preferredCity: "Jodhpur",
+    });
+    expect(await extractRequirements("My budget is ₹80 lakh and I need 3 BHK", { voiceLatencyMode: true })).toMatchObject({
+      bhk: 3,
+      budgetMaxInr: 8000000,
+    });
+  });
+
   it("understands Hindi numeral BHK", async () => {
     expect((await extractRequirements("मुझे तीन बीएचके चाहिए"))).toMatchObject({ bhk: 3 });
   });

@@ -31,7 +31,8 @@ const bodySchema = z.object({
  * idempotency window returns 409 instead of creating duplicate work (on top
  * of the engine's own pending-task/cooldown suppression).
  */
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const { organizationId, role, userId } = await requireTenant();
     const rl = await staffApiLimiter.check(`staff-api:${userId}:${getClientIp(req.headers)}`);

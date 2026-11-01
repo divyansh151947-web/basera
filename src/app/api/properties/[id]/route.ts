@@ -4,7 +4,8 @@ import { getPropertyById, updateProperty, archiveProperty } from "@/lib/data/pro
 import { propertyUpdateSchema } from "@/lib/validation";
 import { getClientIp, rateLimitedResponse, staffApiLimiter } from "@/lib/rate-limit";
 
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const { organizationId, userId } = await requireRole(["BUSINESS_ADMIN", "MANAGER", "SALES_AGENT"]);
     const rl = await staffApiLimiter.check(`staff-api:${userId}:${getClientIp(req.headers)}`);
@@ -17,7 +18,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   }
 }
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const { organizationId, userId } = await requireRole(["BUSINESS_ADMIN", "MANAGER"]);
     const rl = await staffApiLimiter.check(`staff-api:${userId}:${getClientIp(req.headers)}`);
@@ -33,7 +35,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const { organizationId, userId } = await requireRole(["BUSINESS_ADMIN", "MANAGER"]);
     const rl = await staffApiLimiter.check(`staff-api:${userId}:${getClientIp(req.headers)}`);

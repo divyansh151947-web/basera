@@ -124,7 +124,7 @@ export function useLiveVoiceSession(options: UseLiveVoiceSessionOptions): UseLiv
 
   const sessionRef = useRef<LiveVoiceSession | null>(null);
   const wavPlayerRef = useRef<WavPlayer | null>(null);
-  const tokenProviderRef = useRef<() => Promise<{ token: string; model: string } | null>>();
+  const tokenProviderRef = useRef<() => Promise<{ token: string; model: string } | null>>(null);
   const sessionIdRef = useRef<string | null>(null);
   const languageRef = useRef(language);
   const greetedRef = useRef(false);

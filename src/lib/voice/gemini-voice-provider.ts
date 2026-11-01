@@ -87,8 +87,13 @@ function ttsVoice(): string {
 }
 
 function turnTimeoutMs(): number {
+  // Voice turns are interactive: a hung provider request must hand the turn
+  // to the next model (or fail fast) instead of stalling the reply for a
+  // minute. Measured healthy responses arrive in 1–7 s, so 20 s is a generous
+  // bound that still catches a stalled connection. Override with
+  // VOICE_TURN_TIMEOUT_MS (5 s–120 s) when a slower model is pinned.
   const raw = Number(process.env.VOICE_TURN_TIMEOUT_MS);
-  return Number.isFinite(raw) && raw >= 5_000 && raw <= 120_000 ? raw : 60_000;
+  return Number.isFinite(raw) && raw >= 5_000 && raw <= 120_000 ? raw : 20_000;
 }
 
 /** Browser/MediaRecorder MIME types Gemini audio input accepts. Anything
@@ -275,12 +280,20 @@ export function toPlayableWav(bytes: Buffer, mimeType?: string | null): Buffer {
 
 /** Same-vendor models tried after the primary one is throttled. Gemini's free
  *  tier enforces a PER-MODEL daily request cap (measured: ~20/day on the flash
- *  aliases, ~10/day on the TTS models) and answers capacity spikes with 503
- *  UNAVAILABLE, so a single default model stops working partway through the
- *  day. Falling back stays inside the same vendor and the same free tier, so it
- *  never creates surprise cost. Override or disable with the env vars below. */
+ *  aliases, exactly 10/day on the TTS models — quotaId
+ *  GenerateRequestsPerDayPerProjectPerModel) and answers capacity spikes with
+ *  503 UNAVAILABLE, so a single default model stops working partway through the
+ *  day (measured: the primary TTS model answers 429 after 10 replies). Falling
+ *  back stays inside the same vendor and the same free tier, so it never
+ *  creates surprise cost; each extra model simply adds its own 10/day budget.
+ *  Every default below is verified live with the Kore voice, in BOTH plain and
+ *  SSE streaming modes. Override or disable with the env vars below. */
 const DEFAULT_STT_FALLBACK_MODELS = ["gemini-3.5-flash-lite", "gemini-3.6-flash"];
-const DEFAULT_TTS_FALLBACK_MODELS = ["gemini-3.1-flash-tts-preview", "gemini-3.8-flash-tts"];
+const DEFAULT_TTS_FALLBACK_MODELS = [
+  "gemini-3.8-flash-lite-tts",
+  "gemini-3.1-flash-tts-preview",
+  "gemini-2.5-flash-preview-tts",
+];
 
 /** Primary first, then fallbacks. When the env var is PRESENT its value is
  *  authoritative (an empty value disables fallbacks entirely); when ABSENT the
@@ -297,6 +310,62 @@ function sttModels(): string[] {
 
 function ttsModels(): string[] {
   return resolveModelChain(ttsModel(), "GEMINI_TTS_FALLBACK_MODELS", DEFAULT_TTS_FALLBACK_MODELS);
+}
+
+function supportsStreamingTts(model: string): boolean {
+  // Gemini TTS streaming is supported by 3.1 and newer. Older explicit model
+  // overrides keep using the existing complete-audio path.
+  return /^gemini-3\.(?:[1-9]\d*)-.+tts/i.test(model);
+}
+
+async function readStreamingAudio(
+  response: Response,
+  onAudioChunk: (base64: string, mimeType: string) => void | Promise<void>
+): Promise<{ chunks: number; responseBytes: number }> {
+  if (!response.body) throw new Error("Voice synthesis stream was empty.");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let dataLines: string[] = [];
+  let chunks = 0;
+  let responseBytes = 0;
+
+  const consumeEvent = async () => {
+    if (!dataLines.length) return;
+    const raw = dataLines.join("\n");
+    dataLines = [];
+    if (!raw || raw === "[DONE]") return;
+    let data: GenerateContentResponse | null = null;
+    try {
+      data = JSON.parse(raw) as GenerateContentResponse;
+    } catch {
+      throw new Error("Voice synthesis returned invalid streaming data.");
+    }
+    const audio = extractInlineAudio(data);
+    if (!audio || !audio.bytes.length) return;
+    chunks += 1;
+    responseBytes += audio.bytes.length;
+    await onAudioChunk(audio.bytes.toString("base64"), audio.mimeType || "audio/L16;codec=pcm;rate=24000");
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line) await consumeEvent();
+        else if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+      }
+      if (done) break;
+    }
+    if (buffer.startsWith("data:")) dataLines.push(buffer.slice(5).trimStart());
+    await consumeEvent();
+  } finally {
+    reader.releaseLock();
+  }
+  return { chunks, responseBytes };
 }
 
 /** A provider failure that another model of the same vendor might not hit
@@ -444,9 +513,20 @@ export class GeminiVoiceProvider implements VoiceProvider {
 
     let last: Error | null = null;
     for (const model of ttsModels()) {
+      let emittedChunks = 0;
       try {
-        return await this.synthesizeWithModel(model, text);
+        const onAudioChunk = input.onAudioChunk
+          ? async (base64: string, mimeType: string) => {
+              emittedChunks += 1;
+              await input.onAudioChunk?.(base64, mimeType);
+            }
+          : undefined;
+        return await this.synthesizeWithModel(model, text, onAudioChunk);
       } catch (err) {
+        // A model fallback after audio has reached the browser would replay
+        // part of the reply. Preserve single-response playback: only retry
+        // another TTS model when the failing attempt emitted no audio.
+        if (emittedChunks > 0) throw err;
         const throttle = asThrottleError(err);
         if (!throttle) throw err;
         last = throttle;
@@ -455,12 +535,17 @@ export class GeminiVoiceProvider implements VoiceProvider {
     throw last ?? new Error("Voice synthesis failed. Please try again.");
   }
 
-  private async synthesizeWithModel(model: string, text: string): Promise<VoiceSynthesizeResult> {
+  private async synthesizeWithModel(
+    model: string,
+    text: string,
+    onAudioChunk?: (base64: string, mimeType: string) => void | Promise<void>
+  ): Promise<VoiceSynthesizeResult> {
     const startedAt = Date.now();
+    const streaming = Boolean(onAudioChunk && supportsStreamingTts(model));
     let res: Response;
     try {
       res = await fetchWithTransientRetry(
-        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:${streaming ? "streamGenerateContent?alt=sse" : "generateContent"}`,
         {
           method: "POST",
           headers: { "x-goog-api-key": this.key(), "content-type": "application/json" },
@@ -484,6 +569,25 @@ export class GeminiVoiceProvider implements VoiceProvider {
     if (!res.ok) {
       resBody = await res.json().catch(() => null);
       throw toError(res.status, "synthesis", resBody);
+    }
+    if (streaming && onAudioChunk) {
+      const streamed = await readStreamingAudio(res, onAudioChunk);
+      if (streamed.chunks === 0) throw new Error("Voice synthesis did not return audio. Check the server voice configuration.");
+      return {
+        audioBase64: null,
+        audioMimeType: "audio/L16;codec=pcm;rate=24000",
+        mock: false,
+        processingNote: "Live provider: reply synthesized and streamed server-side (Gemini); raw audio is not stored.",
+        providerMetadata: {
+          provider: GEMINI_VOICE_PROVIDER_ID,
+          voice: ttsVoice(),
+          model,
+          responseBytes: streamed.responseBytes,
+          chunks: streamed.chunks,
+          streamed: true,
+          requestMs: Date.now() - startedAt,
+        },
+      };
     }
     const data = (await res.json().catch(() => null)) as GenerateContentResponse | null;
     const audio = extractInlineAudio(data);

@@ -25,7 +25,8 @@ const dismissSchema = z.object({
  * leads for DISMISS_SUPPRESSION_DAYS. The underlying facts are unchanged,
  * so a dismissed leak can honestly reappear after the window.
  */
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const { organizationId, role, userId } = await requireTenant();
     const rl = await staffApiLimiter.check(`staff-api:${userId}:${getClientIp(req.headers)}`);

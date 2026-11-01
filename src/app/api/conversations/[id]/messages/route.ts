@@ -8,7 +8,8 @@ import { z } from "zod";
 
 const schema = z.object({ content: z.string().min(1).max(4000), takeOver: z.boolean().optional(), returnToAI: z.boolean().optional() });
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const { organizationId, role, userId } = await requireTenant();
     const rl = await staffApiLimiter.check(`staff-api:${userId}:${getClientIp(req.headers)}`);

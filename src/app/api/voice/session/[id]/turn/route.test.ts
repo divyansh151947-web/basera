@@ -30,7 +30,7 @@ function postTurn(id: string, body: unknown) {
       headers: { "Content-Type": "application/json", "x-forwarded-for": "9.9.9.99" },
       body: JSON.stringify(body),
     }),
-    { params: { id } } as unknown as { params: { id: string } }
+    { params: Promise.resolve({ id }) }
   );
 }
 

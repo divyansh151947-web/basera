@@ -19,6 +19,7 @@ const bodySchema = z.object({
   /** Phase 2: browser-captured audio (base64). Never stored server-side. */
   audioBase64: z.string().max(Math.ceil((VOICE_MAX_AUDIO_BYTES * 4) / 3) + 1024).optional(),
   audioMimeType: z.string().max(64).optional(),
+  streamAudio: z.boolean().optional().default(false),
 });
 
 /**
@@ -29,7 +30,8 @@ const bodySchema = z.object({
  * server-side, never stored). The transcript flows through the existing
  * Basera AI pipeline; the reply comes back as text plus live-provider audio.
  */
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const ip = getClientIp(req.headers);
   const minuteCheck = await voiceIpMinuteLimiter.check(`voice:ip-minute:${ip}`);
   if (!minuteCheck.allowed) return rateLimitedResponse(minuteCheck.retryAfterMs);
@@ -42,6 +44,50 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!parsed.success) return NextResponse.json({ error: "Invalid input" }, { status: 400 });
 
   try {
+    if (parsed.data.streamAudio) {
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          let closed = false;
+          const emit = (event: Record<string, unknown>) => {
+            if (closed) return;
+            controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+          };
+          const close = () => {
+            if (closed) return;
+            closed = true;
+            controller.close();
+          };
+
+          void voiceTurn({
+            sessionId: params.id,
+            transcriptText: parsed.data.transcriptText,
+            language: parsed.data.language,
+            audioBase64: parsed.data.audioBase64 ?? null,
+            audioMimeType: parsed.data.audioMimeType ?? null,
+            onReply: (reply) => emit({ type: "reply", ...reply }),
+            onAudioChunk: (base64, mimeType) => emit({ type: "audio", base64, mimeType }),
+            onTiming: (stage, durationMs) => emit({ type: "timing", stage, durationMs }),
+          })
+            .then((result) => emit({ type: "complete", ...result }))
+            .catch((err) => {
+              const mapped = mapVoiceTurnError(err);
+              if (mapped.status === 500) console.error(err);
+              emit({ type: "error", status: mapped.status, error: mapped.error, code: mapped.code });
+            })
+            .finally(close);
+        },
+      });
+      return new Response(stream, {
+        status: 200,
+        headers: {
+          "Content-Type": "application/x-ndjson; charset=utf-8",
+          "Cache-Control": "no-cache, no-transform",
+          "X-Accel-Buffering": "no",
+        },
+      });
+    }
+
     const result = await voiceTurn({
       sessionId: params.id,
       transcriptText: parsed.data.transcriptText,

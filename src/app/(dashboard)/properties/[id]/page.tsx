@@ -5,7 +5,8 @@ import { getPropertyById } from "@/lib/data/properties";
 import { formatInr } from "@/lib/formatters";
 import { Pencil } from "lucide-react";
 
-export default async function PropertyDetailPage({ params }: { params: { id: string } }) {
+export default async function PropertyDetailPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const session = await getCurrentSession();
   if (!session?.user) redirect("/login");
   const organizationId = (session.user as any).organizationId as string;

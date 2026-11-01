@@ -25,10 +25,8 @@ const updateDocSchema = z.object({
 /**
  * GET /api/knowledge/documents/[id] — Get a single document
  */
-export async function GET(
-  req: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const ip = getClientIp(req.headers);
   const rateCheck = await knowledgeApiLimiter.check(`knowledge:get:${ip}`);
   if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
@@ -63,10 +61,8 @@ export async function GET(
 /**
  * PATCH /api/knowledge/documents/[id] — Update a document
  */
-export async function PATCH(
-  req: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function PATCH(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const ip = getClientIp(req.headers);
   const rateCheck = await knowledgeApiLimiter.check(`knowledge:update:${ip}`);
   if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
@@ -129,10 +125,8 @@ export async function PATCH(
 /**
  * DELETE /api/knowledge/documents/[id] — Delete a document
  */
-export async function DELETE(
-  req: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function DELETE(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const ip = getClientIp(req.headers);
   const rateCheck = await knowledgeApiLimiter.check(`knowledge:delete:${ip}`);
   if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);

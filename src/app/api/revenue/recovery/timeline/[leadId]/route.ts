@@ -12,7 +12,8 @@ import { getClientIp, rateLimitedResponse, staffApiLimiter } from "@/lib/rate-li
  * Tenant scope first (404), then assignment scope (403) — no IDs trusted
  * from the client beyond the path parameter.
  */
-export async function GET(req: NextRequest, { params }: { params: { leadId: string } }) {
+export async function GET(req: NextRequest, props: { params: Promise<{ leadId: string }> }) {
+  const params = await props.params;
   try {
     const { organizationId, role, userId } = await requireTenant();
     const rl = await staffApiLimiter.check(`staff-api:${userId}:${getClientIp(req.headers)}`);

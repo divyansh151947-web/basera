@@ -247,7 +247,7 @@ describe("landing integration (3D experience is the homepage)", () => {
   const page = readFileSync(resolve(here, "..", "..", "app", "page.tsx"), "utf8");
 
   it("landing opens the interactive 3D experience, not the flat hero", () => {
-    expect(page).toMatch(/<PropertyTour /);
+    expect(page).toMatch(/<HomePropertyTour \/>/);
     expect(page).toMatch(/<JourneySection \/>/);
     expect(page).not.toMatch(/Turn more real-estate enquiries into buyers/);
   });
@@ -264,7 +264,7 @@ describe("landing integration (3D experience is the homepage)", () => {
       resolve(here, "..", "..", "app", "(dashboard)", "dashboard", "page.tsx"),
       "utf8"
     );
-    expect(dashboard).toMatch(/<RevenueTower atRisk=\{revenueRisk\.totalRevenueAtRisk\}/);
+    expect(dashboard).toMatch(/<DashboardRevenueTower atRisk=\{revenueRisk\.totalRevenueAtRisk\}/);
     expect(dashboard).toMatch(/<OnboardingChecklist organizationId=\{organizationId\} \/>/);
     expect(dashboard).toMatch(/Conversion funnel|conversion/i);
   });

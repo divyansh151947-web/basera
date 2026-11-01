@@ -47,7 +47,8 @@ function parseRange(header: string | null, size: number): { start: number; end: 
   return { start, end: Math.min(end, size - 1) };
 }
 
-export async function GET(req: NextRequest, { params }: { params: { path: string[] } }) {
+export async function GET(req: NextRequest, props: { params: Promise<{ path: string[] }> }) {
+  const params = await props.params;
   const ip = getClientIp(req.headers);
   const rl = await mediaApiLimiter.check(`media:${ip}`);
   if (!rl.allowed) return rateLimitedResponse(rl.retryAfterMs);

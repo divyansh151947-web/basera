@@ -1996,6 +1996,7 @@ async function sectionVisualRegressions() {
       .waitForResponse((r) => r.url().includes("/api/voice/session") && r.request().method() === "POST", { timeout: 30000 })
       .catch(() => null);
     const voiceInput = page.locator('textarea[aria-label="Type your message instead of speaking"]').first();
+    await voiceInput.waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
     check(R, "voice panel offers a text fallback input", (await voiceInput.count()) > 0);
     if (await voiceInput.count()) {
       await voiceInput.fill("Hi, I want a 3 BHK in Jaipur");

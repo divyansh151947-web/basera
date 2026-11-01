@@ -14,6 +14,7 @@ import {
   type VoiceLoopState,
 } from "@/lib/voice/voice-loop-controller";
 import { isAutoplayBlockedError, WavPlayer } from "@/lib/voice/wav-player";
+import { PcmPlayer } from "@/lib/voice/live-audio";
 import { voiceDiag } from "@/lib/voice/voice-diagnostics";
 import { VOICE_GREETING_TEXT } from "@/lib/voice/voice-greeting";
 import { VOICE_TOUR_EVENT, type VoiceClientAction } from "@/lib/ai/tour-navigation";
@@ -121,6 +122,7 @@ export function VoiceSessionWidget({ defaultOrgSlug }: { defaultOrgSlug?: string
   const sessionIdRef = useRef<string | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const streamedPlayerRef = useRef<PcmPlayer | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   /** Non-loop clip (greeting / manual replay) so a new clip can stop the
    *  previous one and nothing ever plays over something else. */
@@ -143,6 +145,8 @@ export function VoiceSessionWidget({ defaultOrgSlug }: { defaultOrgSlug?: string
   }, []);
 
   const releaseMedia = useCallback(() => {
+    streamedPlayerRef.current?.stopAndClear();
+    streamedPlayerRef.current = null;
     try {
       streamRef.current?.getTracks().forEach((track) => track.stop());
     } catch {
@@ -263,6 +267,8 @@ export function VoiceSessionWidget({ defaultOrgSlug }: { defaultOrgSlug?: string
    *  together with the notification, so a stale/finished reply never flips
    *  the state of a newer one. */
   const stopAuxiliaryPlayback = useCallback(() => {
+    streamedPlayerRef.current?.stopAndClear();
+    streamedPlayerRef.current = null;
     auxiliaryPlayerRef.current?.stop();
     auxiliaryPlayerRef.current = null;
     setMicMuted(false);
@@ -563,11 +569,13 @@ export function VoiceSessionWidget({ defaultOrgSlug }: { defaultOrgSlug?: string
       if (!sessionId) {
         throw toVoiceLoopError(null, "Voice session is not ready.");
       }
+      const speechEndAt = performance.now();
       const response = await fetch(`/api/voice/session/${sessionId}/turn`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           transcriptText,
+          streamAudio: true,
           ...(audio ? { audioBase64: audio.base64, audioMimeType: audio.mimeType } : {}),
         }),
       });
@@ -583,7 +591,153 @@ export function VoiceSessionWidget({ defaultOrgSlug }: { defaultOrgSlug?: string
         }
         throw toVoiceLoopError(response.status, message, serverCode);
       }
-      const data = await response.json();
+      let data: Record<string, any>;
+      let progressiveAudio = false;
+      const audioParts: Uint8Array[] = [];
+      let streamPlayer: PcmPlayer | null = null;
+      let streamComplete = false;
+      let drainedBeforeComplete = false;
+      let resolveDrained: (() => void) | null = null;
+      let drainPromise: Promise<void> | null = null;
+      let firstAudioLogged = false;
+      const ensurePlayer = (mimeType: string) => {
+        const context = audioCtxRef.current;
+        if (!context || context.state === "closed" || !/pcm|l16/i.test(mimeType)) return null;
+        if (!streamPlayer) {
+          streamPlayer = new PcmPlayer(context);
+          streamedPlayerRef.current = streamPlayer;
+          streamPlayer.onDrained = () => {
+            if (streamComplete) resolveDrained?.();
+            else drainedBeforeComplete = true;
+          };
+          streamPlayer.onStarted = () => {
+            if (firstAudioLogged) return;
+            firstAudioLogged = true;
+            voiceDiag("turn:first-audio-scheduled", { speechEndToAudioMs: Math.round(performance.now() - speechEndAt) });
+          };
+          if (context.state !== "running") void context.resume().catch(() => undefined);
+        }
+        return streamPlayer;
+      };
+      const decodeBase64 = (base64: string): Uint8Array => {
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+        return bytes;
+      };
+      const makeWav = (parts: Uint8Array[]): string => {
+        const length = parts.reduce((sum, part) => sum + part.length, 0);
+        const bytes = new Uint8Array(44 + length);
+        const view = new DataView(bytes.buffer);
+        const ascii = (offset: number, value: string) => { for (let i = 0; i < value.length; i += 1) bytes[offset + i] = value.charCodeAt(i); };
+        ascii(0, "RIFF"); view.setUint32(4, 36 + length, true); ascii(8, "WAVE"); ascii(12, "fmt ");
+        view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+        view.setUint32(24, 24000, true); view.setUint32(28, 48000, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+        ascii(36, "data"); view.setUint32(40, length, true);
+        let offset = 44;
+        parts.forEach((part) => { bytes.set(part, offset); offset += part.length; });
+        let binary = "";
+        for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...Array.from(bytes.subarray(i, i + 0x8000)));
+        return btoa(binary);
+      };
+
+      if (response.headers.get("content-type")?.includes("application/x-ndjson") && response.body) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let pending = "";
+        let reply: Record<string, any> | null = null;
+        let completed: Record<string, any> | null = null;
+        let streamError: Record<string, any> | null = null;
+        const handleLine = (line: string) => {
+          if (!line.trim()) return;
+          const event = JSON.parse(line) as Record<string, any>;
+          if (event.type === "reply") {
+            reply = event;
+            const action = (event.voiceAction ?? null) as VoiceClientAction | null;
+            if (action) window.dispatchEvent(new CustomEvent(VOICE_TOUR_EVENT, { detail: action }));
+            if (typeof event.language === "string" && event.language) langRef.current = event.language;
+            setMicMuted(true);
+            pushMessage("user", String(event.transcriptText ?? transcriptText ?? "voice message"));
+            pushMessage("assistant", String(event.reply ?? ""));
+          } else if (event.type === "audio" && typeof event.base64 === "string") {
+            progressiveAudio = true;
+            const bytes = decodeBase64(event.base64);
+            audioParts.push(bytes);
+            const player = ensurePlayer(String(event.mimeType ?? ""));
+            if (player) player.queueBase64(event.base64);
+            else voiceDiag("turn:stream-fallback", { reason: "pcm-playback-unavailable" });
+          } else if (event.type === "timing") {
+            voiceDiag(`server:${String(event.stage ?? "stage")}`, { durationMs: Number(event.durationMs) || 0 });
+          } else if (event.type === "complete") completed = event;
+          else if (event.type === "error") streamError = event;
+        };
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            pending += decoder.decode(value, { stream: !done });
+            const lines = pending.split(/\r?\n/);
+            pending = lines.pop() ?? "";
+            for (const line of lines) handleLine(line);
+            if (done) break;
+          }
+          if (pending.trim()) handleLine(pending);
+        } catch {
+          streamedPlayerRef.current?.stopAndClear();
+          streamedPlayerRef.current = null;
+          setMicMuted(false);
+          throw toVoiceLoopError(null, "The voice response stream was interrupted. Please try again.");
+        } finally {
+          reader.releaseLock();
+        }
+        const finalStreamError = streamError as Record<string, any> | null;
+        const finalReply = reply as Record<string, any> | null;
+        const finalCompleted = completed as Record<string, any> | null;
+        const finalPlayer = streamPlayer as PcmPlayer | null;
+        if (finalStreamError) {
+          finalPlayer?.stopAndClear();
+          streamedPlayerRef.current = null;
+          setMicMuted(false);
+          throw toVoiceLoopError(Number(finalStreamError.status) || null, String(finalStreamError.error ?? "The voice turn failed."), String(finalStreamError.code ?? "") || null);
+        }
+        if (!finalCompleted || !finalReply) throw toVoiceLoopError(null, "The voice response was incomplete. Please try again.");
+        data = finalCompleted;
+        data.reply = String(finalReply.reply ?? "");
+        data.transcriptText = String(finalReply.transcriptText ?? transcriptText);
+        data.language = finalReply.language;
+        data.voiceAction = finalReply.voiceAction;
+        if (progressiveAudio && audioParts.length && finalPlayer) {
+          setTtsMissed(null);
+          setReplayClip({ base64: makeWav(audioParts), mimeType: "audio/wav", kind: "reply", blocked: false });
+          drainPromise = new Promise((resolve) => { resolveDrained = resolve; });
+          streamComplete = true;
+          const settleDrain = resolveDrained as (() => void) | null;
+          if (drainedBeforeComplete || !finalPlayer.isPlaying()) settleDrain?.();
+          await drainPromise!;
+          streamedPlayerRef.current = null;
+        } else if (finalCompleted.replyAudioBase64) {
+          setTtsMissed(null);
+        } else if (progressiveAudio && audioParts.length) {
+          // No usable Web Audio context (for example, a restrictive mobile
+          // browser): retain the complete PCM response and use the existing
+          // WAV playback path after the server has finished streaming it.
+          setTtsMissed(null);
+        } else {
+          setReplayClip(null);
+          stopAuxiliaryPlayback();
+          setTtsMissed(data.reply || null);
+        }
+        voiceDiag("turn:stream-complete", { speechEndToResponseMs: Math.round(performance.now() - speechEndAt), streamed: progressiveAudio });
+        return {
+          reply: String(data.reply ?? ""),
+          replyAudioBase64: finalCompleted.replyAudioBase64 ?? (progressiveAudio && audioParts.length && !finalPlayer ? makeWav(audioParts) : null),
+          replyAudioMimeType: finalCompleted.replyAudioMimeType ?? null,
+          transcript: data.transcriptText ?? null,
+          messagesDelivered: true,
+          audioAlreadyPlayed: progressiveAudio && audioParts.length > 0 && Boolean(finalPlayer),
+        };
+      } else {
+        data = await response.json();
+      }
       const action = (data?.voiceAction ?? null) as VoiceClientAction | null;
       if (action) {
         window.dispatchEvent(new CustomEvent(VOICE_TOUR_EVENT, { detail: action }));

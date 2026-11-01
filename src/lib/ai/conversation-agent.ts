@@ -60,7 +60,11 @@ export async function processInboundMessage(
    * server-side from an eligibility-checked row). Appended to the verified
    * data so the model can answer questions about that specific listing.
    */
-  propertyContext?: string | null }
+  propertyContext?: string | null;
+  /** Optional server-side timing hook; omitted for non-diagnostic callers. */
+  onTiming?: (stage: string, durationMs: number) => void;
+  /** Bounded request policy for interactive voice turns only. */
+  voiceLatencyMode?: boolean }
 ): Promise<AgentTurnResult> {
   const language = options?.language ?? "en";
   await addMessage(conversationId, "LEAD", incomingText, { metadata: options?.inboundMetadata, externalMessageId: options?.inboundExternalMessageId });
@@ -74,7 +78,9 @@ export async function processInboundMessage(
   if (!lead) throw new Error("Lead not found");
 
   // 1. Qualification: extract structured fields, merge onto the lead (update with new values, never overwrite with undefined)
-  const extracted = await extractRequirements(incomingText);
+  const extractionStartedAt = Date.now();
+  const extracted = await extractRequirements(incomingText, { voiceLatencyMode: options?.voiceLatencyMode });
+  options?.onTiming?.("requirementExtractionMs", Date.now() - extractionStartedAt);
   const merged = {
     name: extracted.name ?? lead.name,
     preferredCity: extracted.preferredCity ?? lead.preferredCity,
@@ -94,10 +100,12 @@ export async function processInboundMessage(
   // 2. Property matching against this org's real inventory only, and
   // 3. Knowledge retrieval (verified data grounding) — independent reads,
   // so they run concurrently rather than as two sequential full scans.
+  const retrievalStartedAt = Date.now();
   const [matches, knowledge] = await Promise.all([
     matchProperties(organizationId, merged),
     retrieveKnowledgeContext(organizationId, incomingText, { city: merged.preferredCity ?? undefined }),
   ]);
+  options?.onTiming?.("matchingAndKnowledgeMs", Date.now() - retrievalStartedAt);
   // Fold top matches into the verified block explicitly as "recommended for this lead"
   const verifiedBlock =
     formatVerifiedDataBlock(knowledge) +
@@ -118,9 +126,13 @@ export async function processInboundMessage(
 
   let reply: string;
   let aiStatus: "live" | "fallback" = "fallback";
+  const replyLlmStartedAt = Date.now();
   if (aiIsConfigured()) {
     try {
-      const result = await callAI({ system, messages: [...chatHistory, { role: "user", content: wrapUntrustedInput(incomingText) }] });
+      const result = await callAI(
+        { system, messages: [...chatHistory, { role: "user", content: wrapUntrustedInput(incomingText) }] },
+        options?.voiceLatencyMode ? { requestPolicy: "voice" } : undefined
+      );
       reply = result.text.trim();
       aiStatus = "live";
     } catch (err) {
@@ -138,6 +150,7 @@ export async function processInboundMessage(
   } else {
     reply = fallbackReply(merged, matches, language);
   }
+  options?.onTiming?.("replyLlmMs", Date.now() - replyLlmStartedAt);
 
   // 5. Scoring
   const scoreResult = scoreLead(

@@ -11,7 +11,8 @@ import { formatBudgetRange } from "@/lib/formatters";
 import { notFound, redirect } from "next/navigation";
 import LeadControls from "./lead-controls";
 
-export default async function LeadDetailPage({ params }: { params: { id: string } }) {
+export default async function LeadDetailPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const session = await getCurrentSession();
   if (!session?.user) redirect("/login");
   const organizationId = (session.user as any).organizationId as string;

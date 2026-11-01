@@ -151,6 +151,10 @@ export interface TurnResult {
    *  Null only when the host has nothing confirmed (falls back to the sent
    *  text, never to an invented message). */
   transcript: string | null;
+  /** The host displayed transcript/reply while consuming a streamed response. */
+  messagesDelivered?: boolean;
+  /** Audio was progressively played during sendTurn and has already drained. */
+  audioAlreadyPlayed?: boolean;
 }
 
 export interface VoiceLoopDeps {
@@ -501,12 +505,23 @@ export class VoiceLoopController {
     // server transcript for voice turns (same string the AI ran on), the
     // typed text for typed turns. Runs only after sendTurn succeeds, so STT
     // or AI failures never fabricate a chat message.
-    this.deps.onTranscript(result.transcript || transcriptText || "voice message");
-    this.deps.onReply(result.reply);
+    if (!result.messagesDelivered) {
+      this.deps.onTranscript(result.transcript || transcriptText || "voice message");
+      this.deps.onReply(result.reply);
+    }
     await this.playReply(result);
   }
 
   private async playReply(result: TurnResult): Promise<void> {
+    if (result.audioAlreadyPlayed) {
+      this.setState("speaking");
+      // Progressive playback has no active MediaRecorder by the time the
+      // turn result returns, so afterSpeech() alone cannot re-enable the
+      // shared microphone track. The host hook also releases that track.
+      this.deps.stopSpeaking();
+      this.afterSpeech();
+      return;
+    }
     // Singleton playback: stop anything previous before starting.
     try {
       this.player?.stop();

@@ -5,18 +5,10 @@ import { getRevenueIntelligence } from "@/lib/revenue-intelligence";
 import { canManageAllLeads } from "@/lib/lead-access";
 import { formatInr } from "@/lib/formatters";
 import { StatCard } from "@/components/ui";
-import dynamic from "next/dynamic";
 import { OnboardingChecklist } from "@/components/onboarding-checklist";
 import { ArrowUpRight, CircleDashed, Flame, Users, Target, CalendarClock, TrendingUp } from "lucide-react";
 import Link from "next/link";
-
-// Lazy-load charts (heavy recharts dependency) and the 3D revenue tower
-// (heavy three dependency) so the dashboard shell paints first.
-const FunnelChart = dynamic(() => import("@/components/charts").then((mod) => mod.FunnelChart), { ssr: false, loading: () => <div className="h-64 animate-pulse rounded-xl bg-white/5" aria-busy="true" /> });
-const TrendChart = dynamic(() => import("@/components/charts").then((mod) => mod.TrendChart), { ssr: false, loading: () => <div className="h-64 animate-pulse rounded-xl bg-white/5" aria-busy="true" /> });
-const SourcePie = dynamic(() => import("@/components/charts").then((mod) => mod.SourcePie), { ssr: false, loading: () => <div className="h-64 animate-pulse rounded-xl bg-white/5" aria-busy="true" /> });
-const TemperatureBar = dynamic(() => import("@/components/charts").then((mod) => mod.TemperatureBar), { ssr: false, loading: () => <div className="h-16 animate-pulse rounded-xl bg-white/5" aria-busy="true" /> });
-const RevenueTower = dynamic(() => import("@/components/property-tour/RevenueTower").then((mod) => mod.RevenueTower), { ssr: false, loading: () => <div className="h-40 animate-pulse rounded-2xl bg-white/5" aria-busy="true" /> });
+import { DashboardFunnelChart, DashboardTrendChart, DashboardSourcePie, DashboardTemperatureBar, DashboardRevenueTower } from "@/components/dashboard/DashboardVisuals";
 
 export default async function DashboardPage() {
   const session = await getCurrentSession();
@@ -63,7 +55,7 @@ export default async function DashboardPage() {
 
       <OnboardingChecklist organizationId={organizationId} />
 
-      <RevenueTower atRisk={revenueRisk.totalRevenueAtRisk} critical={revenueRisk.counts.CRITICAL} />
+      <DashboardRevenueTower atRisk={revenueRisk.totalRevenueAtRisk} critical={revenueRisk.counts.CRITICAL} />
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Total leads" value={counts.total} icon={<Users size={15} />} />
@@ -224,7 +216,7 @@ export default async function DashboardPage() {
             <h2 className="text-lg font-semibold text-ink">Conversion funnel</h2>
             <p className="text-sm text-slate">Leads → contacted → qualified → site visit → conversion</p>
           </div>
-          <FunnelChart data={funnel} />
+          <DashboardFunnelChart data={funnel} />
         </div>
 
         <div className="panel-surface p-5">
@@ -232,21 +224,21 @@ export default async function DashboardPage() {
             <h2 className="text-lg font-semibold text-ink">Leads over time</h2>
             <p className="text-sm text-slate">Last 30 days</p>
           </div>
-          <TrendChart data={overTime as any} />
+          <DashboardTrendChart data={overTime as any} />
         </div>
 
         <div className="panel-surface p-5">
           <div className="mb-4">
             <h2 className="text-lg font-semibold text-ink">Lead source</h2>
           </div>
-          <SourcePie data={bySource as any} />
+          <DashboardSourcePie data={bySource as any} />
         </div>
 
         <div className="panel-surface p-5">
           <div className="mb-4">
             <h2 className="text-lg font-semibold text-ink">Lead temperature mix</h2>
           </div>
-          <TemperatureBar hot={counts.byTemp["HOT"] ?? 0} warm={counts.byTemp["WARM"] ?? 0} cold={counts.byTemp["COLD"] ?? 0} />
+          <DashboardTemperatureBar hot={counts.byTemp["HOT"] ?? 0} warm={counts.byTemp["WARM"] ?? 0} cold={counts.byTemp["COLD"] ?? 0} />
         </div>
       </div>
     </div>

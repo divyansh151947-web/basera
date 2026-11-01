@@ -8,7 +8,8 @@ import { getClientIp, rateLimitedResponse, voiceIpDayLimiter, voiceIpMinuteLimit
  * Transcript and outcomes persist in the standard conversation rows; only
  * the ephemeral registry entry closes. Returns a factual summary.
  */
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const ip = getClientIp(req.headers);
     const minuteCheck = await voiceIpMinuteLimiter.check(`voice:ip-minute:${ip}`);

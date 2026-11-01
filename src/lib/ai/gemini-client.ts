@@ -56,10 +56,16 @@ function primaryChatModel(): string {
 // buckets, which is what keeps the chain alive after the flash aliases 429.
 const DEFAULT_CHAT_FALLBACK_MODELS = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-flash-lite-latest"];
 
-function resolveChatModelChain(): string[] {
+function resolveChatModelChain(requestPolicy?: "voice"): string[] {
   const raw = process.env.GEMINI_CHAT_FALLBACK_MODELS;
   const extras = raw === undefined ? DEFAULT_CHAT_FALLBACK_MODELS : raw.split(",").map((m) => m.trim()).filter(Boolean);
-  return Array.from(new Set([primaryChatModel(), ...extras]));
+  const regular = Array.from(new Set([primaryChatModel(), ...extras]));
+  if (requestPolicy !== "voice") return regular;
+  // This model has already succeeded as a same-vendor fallback in production
+  // diagnostics. Try it first for short spoken turns; keep configured models
+  // as quota/capacity fallbacks and do not alter non-voice traffic ordering.
+  const voicePrimary = process.env.GEMINI_VOICE_CHAT_MODEL?.trim() || "gemini-3.5-flash-lite";
+  return Array.from(new Set([voicePrimary, ...regular]));
 }
 
 function turnTimeoutMs(): number {
@@ -136,9 +142,13 @@ export interface GeminiCallResult {
   text: string;
 }
 
-export async function callGemini(params: GeminiCallParams): Promise<GeminiCallResult> {
+export async function callGemini(
+  params: GeminiCallParams,
+  options?: { requestPolicy?: "voice" }
+): Promise<GeminiCallResult> {
   const key = apiKey();
-  const models = resolveChatModelChain();
+  const models = resolveChatModelChain(options?.requestPolicy);
+  const voiceDeadline = options?.requestPolicy === "voice" ? Date.now() + 5_000 : null;
   const contents: Array<{ role: GeminiRole; parts: Array<{ text: string }> }> = params.messages.map((m) => ({
     role: m.role === "assistant" ? "model" : "user",
     parts: [{ text: m.content }],
@@ -153,9 +163,13 @@ export async function callGemini(params: GeminiCallParams): Promise<GeminiCallRe
 
   let lastError: Error | null = null;
   for (const model of models) {
+    const remainingVoiceMs = voiceDeadline === null ? null : voiceDeadline - Date.now();
+    if (remainingVoiceMs !== null && remainingVoiceMs <= 0) break;
+    const requestMs = remainingVoiceMs === null ? turnTimeoutMs() : Math.min(turnTimeoutMs(), remainingVoiceMs);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
     const body: GeminiGenerateContentRequest = { ...bodyBase, contents };
     let res: Response;
+    const attemptStartedAt = Date.now();
     try {
       res = await fetchWithTimeout(
         url,
@@ -164,15 +178,21 @@ export async function callGemini(params: GeminiCallParams): Promise<GeminiCallRe
           headers: { "x-goog-api-key": key, "content-type": "application/json" },
           body: JSON.stringify(body),
         },
-        turnTimeoutMs()
+        requestMs
       );
     } catch (err) {
+      if (options?.requestPolicy === "voice") {
+        console.info("[gemini-client] Voice model attempt", { model, elapsedMs: Date.now() - attemptStartedAt, outcome: err instanceof Error && err.name === "TimeoutError" ? "timeout" : "network-error" });
+      }
       if (err instanceof Error && err.name === "TimeoutError") {
         lastError = toError(null);
         continue;
       }
       lastError = new Error("Gemini AI request failed. Please try again.");
       continue;
+    }
+    if (options?.requestPolicy === "voice") {
+      console.info("[gemini-client] Voice model attempt", { model, elapsedMs: Date.now() - attemptStartedAt, status: res.status });
     }
 
     let resBody: unknown = null;

@@ -190,6 +190,9 @@ export class PcmPlayer {
   private disposed = false;
   /** Fires when the queue fully drains after playback (listen-resume hook). */
   onDrained: (() => void) | null = null;
+  /** Fired when the first chunk is scheduled for playback. */
+  onStarted: (() => void) | null = null;
+  private started = false;
 
   constructor(
     private readonly context: PcmPlayerContext,
@@ -244,6 +247,14 @@ export class PcmPlayer {
     try {
       source.start(when);
       this.playing = true;
+      if (!this.started) {
+        this.started = true;
+        try {
+          this.onStarted?.();
+        } catch {
+          // Diagnostics and host callbacks must not break audio playback.
+        }
+      }
     } catch {
       this.sources.delete(source);
     }
@@ -263,6 +274,7 @@ export class PcmPlayer {
   stopAndClear(): void {
     this.nextStartTime = 0;
     this.playing = false;
+    this.started = false;
     for (const source of Array.from(this.sources)) {
       try {
         source.onended = null;

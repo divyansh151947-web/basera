@@ -80,6 +80,16 @@ export interface VoiceTurnInput {
    *  provider before entering the standard pipeline. Never stored. */
   audioBase64?: string | null;
   audioMimeType?: string | null;
+  /** Optional response callbacks used by the streaming voice route. */
+  onReply?: (data: {
+    sessionId: string;
+    transcriptText: string;
+    language: VoiceLanguage;
+    reply: string;
+    voiceAction: VoiceClientAction | null;
+  }) => void | Promise<void>;
+  onAudioChunk?: (base64: string, mimeType: string) => void | Promise<void>;
+  onTiming?: (stage: string, durationMs: number) => void;
 }
 
 export interface VoiceTurnResult {
@@ -359,6 +369,7 @@ async function disambiguateTranscript(
  *  → reply text (+ mock synthesis note). The reply comes from the SAME
  *  pipeline as website/WhatsApp; nothing is reimplemented here. */
 export async function voiceTurn(input: VoiceTurnInput): Promise<VoiceTurnResult> {
+  const turnStartedAt = Date.now();
   const provider = await resolveProvider();
   const session = await getVoiceSessionOrThrow(input.sessionId);
   if (session.status !== "ACTIVE") throw new Error("Voice session has ended.");
@@ -372,6 +383,10 @@ export async function voiceTurn(input: VoiceTurnInput): Promise<VoiceTurnResult>
     audioBase64: input.audioBase64 ?? null,
     audioMimeType: input.audioMimeType ?? null,
   });
+  const sttMs = typeof prepared.providerMetadata?.requestMs === "number"
+    ? prepared.providerMetadata.requestMs
+    : null;
+  if (sttMs !== null) input.onTiming?.("sttMs", sttMs);
 
   // Disambiguate numbers using conversation context (e.g., "two" → "2 BHK" or "2 lakh")
   const disambiguatedTranscript = await disambiguateTranscript(prepared.transcriptText, session.conversationId);
@@ -406,6 +421,7 @@ export async function voiceTurn(input: VoiceTurnInput): Promise<VoiceTurnResult>
   // Declared BEFORE the pipeline call below (it is passed as `language`).
   const replyLanguage = toReplyLanguage(turnLanguage);
 
+  const pipelineStartedAt = Date.now();
   const result = await processInboundMessage(
     session.organizationId,
     session.conversationId,
@@ -423,8 +439,11 @@ export async function voiceTurn(input: VoiceTurnInput): Promise<VoiceTurnResult>
       // (system-prompt instruction + localized templates); English callers
       // are unaffected (default "en").
       language: replyLanguage,
+      onTiming: input.onTiming,
+      voiceLatencyMode: true,
     }
   );
+  input.onTiming?.("conversationPipelineMs", Date.now() - pipelineStartedAt);
 
   // Localize only the known agent prompt shapes (exact match); everything
   // else passes through in the agent's own words.
@@ -449,6 +468,14 @@ export async function voiceTurn(input: VoiceTurnInput): Promise<VoiceTurnResult>
     }
   }
 
+  await input.onReply?.({
+    sessionId: session.id,
+    transcriptText: disambiguatedTranscript,
+    language: turnLanguage,
+    reply,
+    voiceAction: hasAction ? voiceAction : null,
+  });
+
   // TTS is best-effort around an already-complete turn: the transcript and
   // the AI reply are persisted above and returned regardless. If synthesis
   // fails (throttling, outage), the client still shows the exact reply text
@@ -461,6 +488,7 @@ export async function voiceTurn(input: VoiceTurnInput): Promise<VoiceTurnResult>
       replyText: reply,
       language: turnLanguage,
       conversationId: session.conversationId,
+      onAudioChunk: input.onAudioChunk,
     });
   } catch (err) {
     synthesis = {
@@ -497,7 +525,17 @@ export async function voiceTurn(input: VoiceTurnInput): Promise<VoiceTurnResult>
     leadId: session.leadId,
     conversationId: session.conversationId,
     conversationStatus: conversation?.status ?? "AI_HANDLING",
-    providerMetadata: synthesis.providerMetadata,
+    providerMetadata: {
+      ...synthesis.providerMetadata,
+      stageTimings: {
+        ...(typeof synthesis.providerMetadata.stageTimings === "object" && synthesis.providerMetadata.stageTimings
+          ? synthesis.providerMetadata.stageTimings as Record<string, unknown>
+          : {}),
+        ...(sttMs !== null ? { sttMs } : {}),
+        ...(typeof synthesis.providerMetadata.requestMs === "number" ? { ttsMs: synthesis.providerMetadata.requestMs } : {}),
+        totalServerMs: Date.now() - turnStartedAt,
+      },
+    },
   };
 }
 
