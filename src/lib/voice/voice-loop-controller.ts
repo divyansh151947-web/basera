@@ -173,6 +173,8 @@ export interface VoiceLoopDeps {
    *  fails; the controller proceeds to listening regardless. */
   speakGreeting(): Promise<void>;
   stopSpeaking(): void;
+  /** Restore or mute the microphone track (used on error recovery). */
+  setMicMuted(muted: boolean): void;
   scheduleTick(fn: () => void, ms: number): unknown;
   cancelTick(handle: unknown): void;
   now(): number;
@@ -453,6 +455,14 @@ export class VoiceLoopController {
     this.recordStartedAt = startedAt;
     this.lastVoiceAt = startedAt;
     this.speechMs = 0;
+    this.aboveCount = 0;
+    // Guarantee the mic track is live before recording, in case a prior
+    // playback left it muted (e.g. a stuck drainPromise).
+    try {
+      this.recorder?.setMuted(false);
+    } catch {
+      /* best effort */
+    }
     this.setState("recording");
   }
 
@@ -485,6 +495,9 @@ export class VoiceLoopController {
         if (!loopErr.fatal && !this.stopped) {
           // Soft failure (e.g. rate-limited, oversize clip): report it and
           // keep listening rather than abandoning the conversation.
+          // Restore the microphone track, which sendTurn could not unmute
+          // because it threw before reaching its normal unmute call.
+          this.deps.setMicMuted(false);
           this.setState("listening");
           this.lastVoiceAt = this.deps.now();
           this.deps.onError(loopErr.code, loopErr.message);
@@ -575,6 +588,11 @@ export class VoiceLoopController {
       return;
     }
     // Automatic resume: the loop continues with no button press.
+    // Reset VAD state so the next turn starts from a clean baseline instead
+    // of inheriting a drifted noise floor / partial trigger counter from the
+    // previous turn's speech.
+    this.noiseBaseline = null;
+    this.aboveCount = 0;
     this.lastVoiceAt = this.deps.now();
     this.bargeInSince = null;
     this.recorder?.setMuted(false);

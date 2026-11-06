@@ -244,7 +244,14 @@ export function VoiceSessionWidget({ defaultOrgSlug }: { defaultOrgSlug?: string
             ? window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
             : undefined;
         if (!Ctor) return null;
-        context = new Ctor();
+        // Create the context at the TTS sample rate (24 kHz) so the browser
+        // does not resample 24 kHz PCM to the system default rate (44.1/48 kHz),
+        // which can introduce audible artifacts/cracking on some devices.
+        try {
+          context = new Ctor({ sampleRate: 24000 });
+        } catch {
+          context = new Ctor();
+        }
         audioCtxRef.current = context;
       }
       if (context.state !== "running" && context.state !== "closed") {
@@ -466,7 +473,12 @@ export function VoiceSessionWidget({ defaultOrgSlug }: { defaultOrgSlug?: string
         // is only used for mic energy sampling anyway.
         let context = audioCtxRef.current;
         if (!context || context.state === "closed") {
-          context = new AudioContext();
+          // Match the TTS sample rate to avoid browser resampling artifacts.
+          try {
+            context = new AudioContext({ sampleRate: 24000 });
+          } catch {
+            context = new AudioContext();
+          }
           audioCtxRef.current = context;
         }
         if (context.state !== "running" && context.state !== "closed") {
@@ -569,6 +581,9 @@ export function VoiceSessionWidget({ defaultOrgSlug }: { defaultOrgSlug?: string
       if (!sessionId) {
         throw toVoiceLoopError(null, "Voice session is not ready.");
       }
+      // Clear any stale TTS error from a previous turn so a successful
+      // response never inherits an earlier failure's red card.
+      setTtsMissed(null);
       const speechEndAt = performance.now();
       const response = await fetch(`/api/voice/session/${sessionId}/turn`, {
         method: "POST",
@@ -712,7 +727,20 @@ export function VoiceSessionWidget({ defaultOrgSlug }: { defaultOrgSlug?: string
           streamComplete = true;
           const settleDrain = resolveDrained as (() => void) | null;
           if (drainedBeforeComplete || !finalPlayer.isPlaying()) settleDrain?.();
-          await drainPromise!;
+          // Guard against a player that never drains (stuck AudioContext /
+          // onended not firing) so the turn always completes and the mic is
+          // restored instead of hanging forever.
+          // Safety net only: compute the timeout from the actual queued audio
+          // duration (+5s buffer) so legitimate long replies are never cut off,
+          // while a stuck player (onended never firing) still recovers instead
+          // of hanging the turn forever.
+          const queuedSamples = audioParts.reduce((sum, part) => sum + Math.floor(part.length / 2), 0);
+          const audioDurationMs = Math.ceil((queuedSamples / 24000) * 1000);
+          const drainTimeoutMs = Math.max(5000, audioDurationMs + 5000);
+          await Promise.race([
+            drainPromise!,
+            new Promise<void>((resolve) => { window.setTimeout(resolve, drainTimeoutMs); }),
+          ]);
           streamedPlayerRef.current = null;
         } else if (finalCompleted.replyAudioBase64) {
           setTtsMissed(null);
@@ -831,6 +859,7 @@ export function VoiceSessionWidget({ defaultOrgSlug }: { defaultOrgSlug?: string
         speakText,
         speakGreeting,
         stopSpeaking,
+        setMicMuted,
         scheduleTick: (fn, ms) => setInterval(fn, ms),
         cancelTick: (handle) => {
           if (handle !== null && handle !== undefined) clearInterval(handle as ReturnType<typeof setInterval>);

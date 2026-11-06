@@ -38,6 +38,7 @@ class Harness {
   micGate: Promise<void> | null = null;
   recordersCreated = 0;
   deliverAudio: RecordedAudio | null = { base64: "dGVzdA==", mimeType: "audio/webm" };
+  micMuted = false;
   energy = 0;
   time = 1_000_000;
   tickFns: (() => void)[] = [];
@@ -106,6 +107,9 @@ class Harness {
       },
       onReply: (t) => {
         this.replies.push(t);
+      },
+      setMicMuted: (muted: boolean) => {
+        this.micMuted = muted;
       },
     };
     this.controller = new VoiceLoopController(deps, {
@@ -305,6 +309,9 @@ describe("automatic voice loop (no manual Speak step)", () => {
     await h.speakThenSilence(500);
     expect(h.controller.getState()).toBe("listening");
     expect(h.errors[0].code).toBe("network_error");
+    // Mic must be restored after a recoverable error so the next turn can
+    // capture speech instead of staying muted forever.
+    expect(h.micMuted).toBe(false);
     await h.speakThenSilence(500);
     expect(h.replies).toEqual(["Back."]);
   });

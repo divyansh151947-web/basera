@@ -71,6 +71,7 @@ function makeDeps(overrides: {
     onError: (code: string, message: string) => errors.push({ code, message }),
     onTranscript: (t: string) => transcripts.push(t),
     onReply: (t: string) => replies.push(t),
+    setMicMuted: () => {},
   } satisfies VoiceLoopDeps;
 
   const controller = new VoiceLoopController(deps, { tickMs: 100, silenceMs: 500, minSpeechMs: 200 });
